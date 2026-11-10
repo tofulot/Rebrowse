@@ -55,9 +55,24 @@ For a workflow such as **list → search a person on LinkedIn → open their pro
 
 Assessments require an estimated confidence of at least 70% and citations to real observation IDs. The panel shows the inferred steps, item cycles, confirmed outcomes, known remaining names/count, likely continuation, and supporting page evidence. For the LinkedIn example, a profile changing to **Pending** or showing **Invitation sent** can support an invitation having been sent; it does not mean the recipient accepted. A click on Connect alone stays an attempt. Named visible outcome signals are checked before counting an outcome as confirmed.
 
-A total is established only from a cited complete, untruncated list whose observed item count matches it. Partial/paginated lists, unreadable canvas-based lists, and lists outside the observed browser cannot establish a full count. Remaining names must occur in cited list/context text. Unknown progress stays unknown rather than inventing names or declaring completion. These are AI assessments of limited observations, not guaranteed task recognition. Fast page changes can occur before a snapshot is captured.
+A total is established only from a cited complete, untruncated list whose observed row count matches it and whose rows map to known item identities. Partial/paginated lists, unreadable canvas-based lists, and lists outside the observed browser cannot establish a full count. Remaining names must occur in the observed source list or a supported item cycle. Unknown progress stays unknown rather than inventing names or declaring completion. These are AI assessments of limited observations, not guaranteed task recognition. Fast page changes can occur before a snapshot is captured.
 
 New detections and meaningful progress/status changes are appended locally to ignored `session-data/repeatable-tasks.jsonl`, including timestamps, confidence, steps, item outcomes, remaining work, and cited evidence. These records can contain names and page text. The dashboard's **Download journal** exports a Markdown report of the current session's last 60 detection updates. The JSONL journal persists across restarts; inference memory starts fresh in each session. Pausing stops new observation/detection. Nothing is published or sent to LinkedIn, and no predicted action is executed. The observed context is sent to SubQ for analysis.
+
+## Work queue and stopping assessment
+
+Each detected task includes a **Work queue** for the current run. SubQ proposes item identities, list-row mappings and cited states during the existing prediction call. The app validates those citations and computes the counts and stopping assessment locally. The dashboard shows each item, its supporting observation IDs, and one of four states:
+
+- **Ready:** observed in the source list with no confirmed outcome or unresolved attempt.
+- **In progress:** a named page supports current work; an outcome still needs checking.
+- **Confirmed:** a named, visible outcome passed the completion checks.
+- **Needs review:** a visible blocker, ambiguous/no matching result, or an attempt without confirmed success. It is never silently skipped or counted as done.
+
+The assessment suggests **Continue** when a ready or in-progress item exists, **Review needed** when unresolved items remain without a ready item, **Check source list** when the known queue is exhausted but its full extent is unknown, and **Finish** only when every unique item in the verified full list has a confirmed outcome. Ready items may continue while other items remain blocked; those blockers stay outstanding. A model's confidence or `finished` label cannot override remaining work.
+
+Duplicate names are counted once (case and whitespace normalized). Exact totals require every observed source row to map to one known identity. Unknown or partial scope shows **At least N remaining · Total unknown**. A shrinking list does not erase outstanding items. A different source list or cycles outside the source trigger review instead of transferring earlier completions into a new run. Items with identical names are treated as one identity in this prototype; workflows requiring disambiguation need richer item identifiers.
+
+Queue states and meaningful stopping changes are saved with the detection journal and included in its Markdown export. This is a prediction of how the task might continue or end; watching continues until you pause it. There is no queue runner, retry action, or automatic submission.
 
 ## Suggested reusable workflows
 
@@ -110,7 +125,7 @@ Run `npm run smoke:subq` to additionally verify live SubQ `observe` and `act` ca
 
 The live prediction check also injects address-bar selection and text-edit signals, verifies that SubQ predicts search/navigation using the entered `wasd` query, and checks that the text is visible in the dashboard. `npm run smoke:desktop` is an interactive macOS check: it opens an isolated browser titled **Rebrowse browser-controls test**; activate that window and press Cmd+L within 90 seconds. It verifies native selection detection and the resulting live prediction, and uses API credits.
 
-`npm run smoke:workflow` replays a three-name workflow on local test pages with simulated inference. `npm run smoke:workflow:subq` uses actual SubQ inference. Both verify cross-page memory, two confirmed local invitation outcomes, the unprocessed third name, a review-only reusable draft, step/parameter checks, local journal and draft exports, and responsive layout. They also verify that reviewing/downloading the draft does not process the third person. They never visit or send requests on real LinkedIn. Live checks use API credits.
+`npm run smoke:workflow` replays a three-name workflow on local test pages with simulated inference. `npm run smoke:workflow:subq` uses actual SubQ inference. Both verify cross-page memory, two confirmed local invitation outcomes, the unprocessed third name, a review-only reusable draft, step/parameter checks, local journal and draft exports, and responsive layout. They verify that reviewing/downloading the draft does not process the third person, then use explicit test-driver navigation/clicks to check a blocker, an in-progress item, and the final finish assessment. The predictor performs no actions. They never visit or send requests on real LinkedIn. Live checks use API credits.
 
 ## Next build
 

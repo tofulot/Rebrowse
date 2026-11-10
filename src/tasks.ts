@@ -4,6 +4,7 @@ import { mkdir, appendFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { Activity, PageContext } from "./observer.js";
 import { workflowSuggestionSchema, buildWorkflowDraft, workflowDraftReport, type WorkflowDraft } from "./workflow-draft.js";
+import { queueProposalSchema, buildWorkQueue, workQueueReport, type WorkQueue } from "./work-queue.js";
 
 export const taskHypothesisSchema = z.object({
   taskId: z.string().nullable(),
@@ -25,6 +26,7 @@ export const taskHypothesisSchema = z.object({
   nextStep: z.string().max(300),
   continuation: z.enum(["likely", "uncertain", "finished"]),
   suggestedWorkflow: workflowSuggestionSchema.nullable().catch(null),
+  workQueue: queueProposalSchema.nullable().catch(null),
 });
 export type TaskHypothesis = z.infer<typeof taskHypothesisSchema>;
 export type Observation = { id: number; time: number; pageId: string; context: PageContext; events: Activity[] };
@@ -36,6 +38,7 @@ export type TaskRecord = {
   nextStep: string; status: "suspected" | "repeating" | "uncertain" | "complete";
   evidence: Array<{ id: number; time: number; title: string; url: string; signals: string }>;
   workflowDraft: WorkflowDraft;
+  workQueue: WorkQueue;
 };
 export type WorkflowContext = { observations: Observation[]; knownTasks: TaskRecord[]; recentActivity: Activity[] };
 const key = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
@@ -86,7 +89,8 @@ export class TaskMemory {
       const outcomeFrame = cycle.outcomeEvidenceId === null ? undefined : frames.get(cycle.outcomeEvidenceId);
       const outcomeText = outcomeFrame ? [outcomeFrame.context.title, ...outcomeFrame.context.headings, outcomeFrame.context.excerpt].join(" ") : "";
       const outcomeVisible = outcomeFrame && (outcomeFrame.context.actions.some((action) => /^(pending|connected|sent|saved|completed|done|processed|submitted|success)\b/i.test(action))
-        || /\b(invitation|request|message|email|form|record|changes|item|task)\s+(successfully\s+)?(sent|submitted|saved|completed|processed)\b/i.test(outcomeText));
+        || outcomeText.split(/[.!?\n]/).some((text) => !/\b(no|not|never|failed|unable)\b/i.test(text)
+          && /\b(invitation|request|message|email|form|record|changes|item|task)\s+(successfully\s+)?(sent|submitted|saved|completed|processed)\b/i.test(text)));
       const confirmed = cycle.outcome === "confirmed" && outcomeFrame && cycle.outcomeEvidenceId !== null && evidenceIds.includes(cycle.outcomeEvidenceId)
         && key(outcomeText).includes(key(cycle.item)) && !!outcomeVisible;
       if (cycle.outcome === "confirmed" && !confirmed) unverifiedOutcomes++;
@@ -97,24 +101,18 @@ export class TaskMemory {
     if (cycles.size < 1) return null;
     const distinctEvidence = new Set([...cycles.values()].flatMap((cycle) => cycle.evidenceIds));
     if (distinctEvidence.size < 2) return null;
-    const completedItems = [...cycles.values()].filter((cycle) => cycle.outcome === "confirmed").map((cycle) => cycle.item);
-    const totalSource = candidate.totalEvidenceId === null ? undefined : frames.get(candidate.totalEvidenceId);
-    const completeSourceList = totalSource?.context.lists?.some((list) => !list.truncated && list.items.length === candidate.totalItems);
-    let totalItems = candidate.totalItems !== null && completeSourceList
-      && candidate.totalItems >= cycles.size && candidate.totalItems >= (previous?.totalItems ?? 0) ? candidate.totalItems : previous?.totalItems ?? null;
-    const remainingSource = candidate.remainingEvidenceId === null ? undefined : frames.get(candidate.remainingEvidenceId);
-    const sourceText = remainingSource ? [...(remainingSource.context.lists || []).flatMap((list) => list.items), remainingSource.context.excerpt].join(" ").toLowerCase() : "";
-    const remainingItems = remainingSource
-      ? [...new Set([...candidate.remainingItems, ...(candidate.currentItem ? [candidate.currentItem] : [])])].filter((item) => sourceText.includes(key(item)) && !completedItems.some((done) => key(done) === key(item)))
-      : (previous?.remainingItems || []).filter((item) => !completedItems.some((done) => key(done) === key(item)));
-    if (totalItems !== null && totalItems < completedItems.length + remainingItems.length) totalItems = null;
-    const remainingCount = totalItems === null ? null : Math.max(0, totalItems - completedItems.length);
+    const workQueue = buildWorkQueue(candidate, [...cycles.values()], frames, previous?.workQueue);
+    const completedItems = workQueue.items.filter((item) => item.state === "confirmed").map((item) => item.item);
+    const remainingItems = workQueue.items.filter((item) => item.state !== "confirmed").map((item) => item.item);
+    const totalItems = workQueue.counts.total;
+    const remainingCount = workQueue.counts.remaining;
     // One confirmed item plus an observed unfinished list supports a candidate,
     // but is not labeled an already repeated pattern.
     if (cycles.size === 1 && (completedItems.length !== 1 || (remainingCount === null ? remainingItems.length === 0 : remainingCount <= 0))) return null;
-    const status = cycles.size === 1 ? "suspected" : totalItems !== null && remainingCount === 0 ? "complete" : candidate.continuation === "likely" ? "repeating" : "uncertain";
+    const status = cycles.size === 1 ? "suspected" : workQueue.decision === "complete" ? "complete" : workQueue.decision === "continue" ? "repeating" : "uncertain";
     const cited = new Set([...candidate.cycles.flatMap((cycle) => cycle.evidenceIds), ...candidate.cycles.flatMap((cycle) => cycle.outcomeEvidenceId === null ? [] : [cycle.outcomeEvidenceId]),
-      ...(candidate.totalEvidenceId === null ? [] : [candidate.totalEvidenceId]), ...(candidate.remainingEvidenceId === null ? [] : [candidate.remainingEvidenceId])]);
+      ...(candidate.totalEvidenceId === null ? [] : [candidate.totalEvidenceId]), ...(candidate.remainingEvidenceId === null ? [] : [candidate.remainingEvidenceId]),
+      ...workQueue.items.flatMap((item) => item.evidenceIds)]);
     const evidence = [...cited].flatMap((id) => {
       const frame = frames.get(id);
       return frame ? [{ id, time: frame.time, title: frame.context.title, url: frame.context.url,
@@ -125,7 +123,9 @@ export class TaskMemory {
       title: candidate.title, confidence: candidate.confidence, steps: candidate.steps,
       reason: candidate.reason + (unverifiedOutcomes ? " Outcomes without a named, visible completion signal are retained as attempts." : ""),
       cycles: [...cycles.values()].slice(-40), completedItems, totalItems, remainingItems, remainingCount,
-      currentItem: candidate.currentItem, nextStep: status === "complete" ? "All observed items have a confirmed outcome." : candidate.nextStep,
+      currentItem: workQueue.items.find((item) => item.state === "in_progress")?.item || null,
+      nextStep: workQueue.decision === "continue" ? `Likely next item: ${workQueue.nextItem}. ${workQueue.reason}` : workQueue.reason,
+      workQueue,
       status, evidence: [...(previous?.evidence || []), ...evidence].filter((entry, index, all) => all.findIndex((other) => other.id === entry.id) === index).slice(-40),
     };
     const unchangedPattern = previous && JSON.stringify(previous.steps) === JSON.stringify(assessment.steps) && previous.status === assessment.status
@@ -134,9 +134,11 @@ export class TaskMemory {
     const workflowDraft = unchangedPattern ? previous.workflowDraft : buildWorkflowDraft(assessment, candidate.suggestedWorkflow, previous?.workflowDraft);
     const record: TaskRecord = { ...assessment, workflowDraft };
     // Do not append the same assessment on every prediction refresh.
-    const signature = (task: TaskRecord) => JSON.stringify({ title: task.title, steps: task.steps, cycles: task.cycles.map(({ item, outcome }) => ({ item, outcome })), total: task.totalItems, remaining: task.remainingItems, current: task.currentItem, status: task.status });
+    const signature = (task: TaskRecord) => JSON.stringify({ title: task.title, steps: task.steps, cycles: task.cycles.map(({ item, outcome }) => ({ item, outcome })), total: task.totalItems, remaining: task.remainingItems, current: task.currentItem, status: task.status,
+      queue: { scope: task.workQueue.scope, decision: task.workQueue.decision, scopeReason: task.workQueue.scopeReason,
+        items: task.workQueue.items.map(({ item, state, reason }) => ({ item, state, reason })) } });
     if (previous && signature(previous) === signature(record)) {
-      Object.assign(previous, { confidence: record.confidence, reason: record.reason, nextStep: record.nextStep, evidence: record.evidence });
+      Object.assign(previous, { confidence: record.confidence, reason: record.reason, nextStep: record.nextStep, evidence: record.evidence, workQueue: record.workQueue });
       return null;
     }
     if (previous) this.tasks.splice(this.tasks.indexOf(previous), 1);
@@ -170,7 +172,7 @@ export function taskReport(log: TaskRecord[]) {
       `Confirmed items: ${task.completedItems.map(safe).join(", ") || "none"}`, `Known remaining items: ${task.remainingItems.map(safe).join(", ") || "unknown or none observed"}`,
       `Likely next step: ${safe(task.nextStep)}`, "", "Supporting observations:",
       ...task.evidence.map((entry) => `- #${entry.id} · ${new Date(entry.time).toISOString()} · ${safe(entry.title)} · ${safe(entry.url)}\n  ${safe(entry.signals)}`), "",
-      workflowDraftReport(task.workflowDraft, "###"), "",
+      workQueueReport(task.workQueue), "", workflowDraftReport(task.workflowDraft, "###"), "",
     ]),
   ].join("\n");
 }

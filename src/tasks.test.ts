@@ -20,7 +20,7 @@ const task = (overrides: Partial<TaskHypothesis> = {}): TaskHypothesis => ({
     { item: "Alex Morgan", evidenceIds: [1, 2], outcome: "confirmed", outcomeEvidenceId: 2 },
     { item: "Sam Rivera", evidenceIds: [1, 3], outcome: "confirmed", outcomeEvidenceId: 3 },
   ], totalItems: 3, totalEvidenceId: 1, remainingItems: ["Jamie Chen"], remainingEvidenceId: 1,
-  currentItem: null, nextStep: "Return to the list and search LinkedIn for Jamie Chen", continuation: "likely", suggestedWorkflow: null, ...overrides,
+  currentItem: null, nextStep: "Return to the list and search LinkedIn for Jamie Chen", continuation: "likely", suggestedWorkflow: null, workQueue: null, ...overrides,
 });
 
 test("two distinct cycles produce an evidence-backed detection with one known remaining item", () => {
@@ -66,7 +66,9 @@ test("clicks alone remain attempts and a missing list does not invent a remainin
   assert.ok(record.cycles.every((cycle) => cycle.outcome === "attempted"));
   assert.equal(record.totalItems, null);
   assert.equal(record.remainingCount, null);
-  assert.deepEqual(record.remainingItems, []);
+  assert.deepEqual(record.remainingItems, ["Alex Morgan", "Sam Rivera"]);
+  assert.equal(record.workQueue.counts.blocked, 2);
+  assert.equal(record.workQueue.decision, "review");
   assert.equal(record.status, "uncertain");
 });
 
@@ -108,7 +110,9 @@ test("unsupported citations and name typos are discarded while valid named evide
 test("a task is complete only when all established items have confirmed outcomes", () => {
   const memory = setup();
   const first = memory.accept(task())!;
-  assert.equal(memory.accept(task({ taskId: first.id, continuation: "finished", remainingItems: [] }))?.status, "uncertain");
+  memory.accept(task({ taskId: first.id, continuation: "finished", remainingItems: [] }));
+  assert.equal(memory.tasks[0]!.status, "repeating");
+  assert.equal(memory.tasks[0]!.workQueue.decision, "continue", "A model finish label cannot override remaining queue items");
   memory.observe({ url: "https://example.com/jamie", title: "Jamie Chen", headings: ["Jamie Chen"], actions: ["Pending"], excerpt: "Invitation sent" }, "profile", []);
   const done = memory.accept(task({ taskId: first.id, cycles: [...task().cycles, { item: "Jamie Chen", evidenceIds: [1, 4], outcome: "confirmed", outcomeEvidenceId: 4 }], remainingItems: [], continuation: "finished" }));
   assert.equal(done?.status, "complete");

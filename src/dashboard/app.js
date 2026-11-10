@@ -104,6 +104,26 @@ function renderWorkflow(state) {
     $('workflow-next').textContent = task.nextStep;
     $('workflow-remaining').textContent = task.remainingItems.length ? `Known unprocessed items: ${task.remainingItems.join(', ')}`
       : task.remainingCount === null ? 'The complete list is not established; remaining work is unknown.' : task.remainingCount ? 'Unprocessed item names have not been established.' : 'Every item in the observed list has a confirmed outcome.';
+    const queue = task.workQueue;
+    const decisions = { continue: 'CONTINUE SUGGESTED', review: 'REVIEW NEEDED', inspect: 'CHECK SOURCE LIST', complete: 'FINISH SUGGESTED' };
+    $('queue-decision').textContent = decisions[queue.decision];
+    $('queue-decision').dataset.decision = queue.decision;
+    $('queue-reason').textContent = queue.reason;
+    $('queue-counts').replaceChildren(...[
+      ['Confirmed', queue.counts.confirmed], ['Ready', queue.counts.ready], ['In progress', queue.counts.inProgress], ['Blocked', queue.counts.blocked],
+    ].map(([label, value]) => { const cell = element('div', 'queue-stat'); cell.append(element('strong', '', String(value)), element('span', '', label)); return cell; }));
+    $('queue-scope').textContent = queue.scope === 'verified' ? `${queue.counts.total} unique items · ${queue.counts.remaining} remaining`
+      : `At least ${queue.counts.knownRemaining} remaining · Total unknown`;
+    $('queue-scope-reason').textContent = queue.scopeReason;
+    $('queue-next').textContent = queue.nextItem ? `Suggested next item: ${queue.nextItem}` : queue.decision === 'complete' ? 'No further repetition suggested.' : 'No next item suggested until the scope or unresolved items are checked.';
+    const itemStates = { unstarted: 'Ready', in_progress: 'In progress', confirmed: 'Confirmed', blocked: 'Needs review' };
+    $('queue-items').replaceChildren(...queue.items.map((item) => {
+      const row = element('li', 'queue-item'); row.dataset.state = item.state;
+      const body = element('div', ''); body.append(element('strong', '', item.item), element('p', '', item.reason),
+        element('span', 'queue-citations', `Observations: ${item.evidenceIds.map((id) => `#${id}`).join(', ')}`));
+      row.append(body, element('span', 'queue-state', itemStates[item.state])); return row;
+    }));
+    $('queue-completion-rule').textContent = queue.completionRule;
     $('workflow-evidence').replaceChildren(...task.evidence.map((entry) => {
       const row = element('li', ''); row.append(element('strong', '', `#${entry.id} · ${entry.title}`), element('span', '', entry.url), element('p', '', entry.signals)); return row;
     }));
