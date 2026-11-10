@@ -1,0 +1,8 @@
+node_modules/
+.env
+.env.*
+!.env.example
+browser-data/
+.DS_Store
+.cache/
+session-data/

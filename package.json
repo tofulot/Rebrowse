@@ -1,0 +1,43 @@
+{
+  "name": "rebrowse",
+  "version": "1.0.0",
+  "description": "A local Stagehand browser prototype for predictive browsing",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "check": "tsc --noEmit",
+    "test": "tsx --test src/*.test.ts",
+    "smoke": "tsx scripts/smoke.ts",
+    "smoke:subq": "tsx scripts/smoke.ts --live",
+    "smoke:predictions": "tsx scripts/predictions-smoke.ts",
+    "smoke:predictions:subq": "tsx scripts/predictions-smoke.ts --live",
+    "smoke:desktop": "tsx scripts/desktop-smoke.ts",
+    "smoke:workflow": "tsx scripts/workflow-smoke.ts",
+    "smoke:workflow:subq": "tsx scripts/workflow-smoke.ts --live"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tofulot/Rebrowse.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/tofulot/Rebrowse/issues"
+  },
+  "homepage": "https://github.com/tofulot/Rebrowse#readme",
+  "dependencies": {
+    "@browserbasehq/stagehand": "^4.4.0",
+    "dotenv": "^18.0.10",
+    "zod": "^4.6.6"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=22.18.0"
+  }
+}
