@@ -75,6 +75,7 @@ guard let index = CommandLine.arguments.firstIndex(of: "--pid"), CommandLine.arg
 }
 let once = CommandLine.arguments.contains("--once")
 let inspectFocus = once && CommandLine.arguments.contains("--inspect-focus")
+let clipboardEnabled = CommandLine.arguments.contains("--clipboard-context")
 let application = AXUIElementCreateApplication(pid)
 AXUIElementSetMessagingTimeout(application, 0.15)
 let system = AXUIElementCreateSystemWide()
@@ -88,6 +89,28 @@ func foregroundPID() -> pid_t? {
         if AXUIElementGetPid(focusedApp, &focusedPID) == .success { return focusedPID }
     }
     return NSWorkspace.shared.frontmostApplication?.processIdentifier
+}
+
+// Observe only the three clipboard shortcuts in this browser's controls.
+// Never read event.characters or collect other keys or other applications.
+var pendingClipboardShortcut: [String: Any]?
+var clipboardShortcutSequence = 0
+var clipboardMonitor: Any?
+if clipboardEnabled && !once {
+    clipboardMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
+        guard foregroundPID() == pid, AXIsProcessTrusted(), event.modifierFlags.contains(.command),
+              !event.modifierFlags.contains(.control), !event.modifierFlags.contains(.option), !event.isARepeat,
+              let kind = [UInt16(8): "copy", UInt16(7): "cut", UInt16(9): "paste"][event.keyCode],
+              let focused = elementAttribute(application, kAXFocusedUIElementAttribute) else { return }
+        let focus = region(focused)
+        guard focus == "address-bar" || focus == "toolbar" || focus == "browser-controls" else { return }
+        clipboardShortcutSequence += 1
+        let shortcut: [String: Any] = ["id": clipboardShortcutSequence, "kind": kind, "target": focus == "address-bar" ? "address-bar" : "browser-controls"]
+        // Let Chrome finish its clipboard write before announcing a copy/cut.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+            if foregroundPID() == pid { pendingClipboardShortcut = shortcut }
+        }
+    }
 }
 
 repeat {
@@ -113,6 +136,12 @@ repeat {
         }
         // No observations from other applications are emitted.
         if active {
+            if clipboardEnabled {
+                // Metadata only. Text is read by the browser adapter after
+                // checking the active tab and excluding protected fields.
+                sample["clipboardVersion"] = NSPasteboard.general.changeCount
+                if let shortcut = pendingClipboardShortcut { sample["clipboardShortcut"] = shortcut }
+            }
             if let pointer = CGEvent(source: nil)?.location {
                 var position: [String: Any] = ["x": Int(pointer.x), "y": Int(pointer.y), "space": "screen", "region": "unknown"]
                 if trusted, let window = elementAttribute(application, kAXFocusedWindowAttribute), let frame = bounds(window) {
@@ -132,6 +161,7 @@ repeat {
             }
         }
         output(sample)
+        pendingClipboardShortcut = nil
     }
     if once { break }
     // Thread.sleep freezes NSWorkspace's cached foreground-app properties.

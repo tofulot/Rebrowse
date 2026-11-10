@@ -81,7 +81,7 @@ test("workflow exports are review-only and stable IDs get versioned when rebuilt
   assert.equal(second.version, 2);
   const report = workflowDraftReport(second);
   assert.match(report, /DRAFT SUGGESTION.*REVIEW ONLY/);
-  assert.match(report, /Execution is disabled/);
+  assert.match(report, /Running requires separate explicit approval/);
   assert.match(report, /\{\{items\}\}/);
   assert.match(report, /Check:/);
   assert.match(report, /Skip and stop rules/);

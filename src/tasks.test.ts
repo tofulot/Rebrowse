@@ -144,7 +144,7 @@ test("journal persists assessments and export documents evidence and unknown pro
     assert.equal(stored.remainingItems[0], "Jamie Chen");
     assert.equal(stored.workflowDraft.execution, "disabled");
     const report = taskReport([record]);
-    assert.match(report, /prediction only|Prediction only/i);
+    assert.match(report, /Predictions do not execute actions/);
     assert.match(report, /Jamie Chen/);
     assert.match(report, /Supporting observations/);
     assert.match(report, /remaining: 1/);

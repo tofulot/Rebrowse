@@ -8,6 +8,9 @@ import { predictNext, type Prediction } from "./predictor.js";
 import type { DesktopObserver, DesktopState } from "./desktop-context.js";
 import { TaskMemory, TaskJournal, taskReport, type TaskRecord } from "./tasks.js";
 import { workflowDraftReport } from "./workflow-draft.js";
+import { z } from "zod";
+import { WorkflowRunner, workflowOffer, RunRequestError, type WorkflowDriver, type StepPlanner, type WorkflowRun, type RunOffer, type WorkflowRunJournal } from "./workflow-runner.js";
+import { clipboardEnabled, clipboardStatus, freshClipboard, sanitizeClipboard, CLIPBOARD_TTL_MS, type ClipboardContext, type ClipboardState } from "./clipboard-context.js";
 
 export type DashboardState = {
   paused: boolean;
@@ -24,6 +27,8 @@ export type DashboardState = {
   activeTaskId: string | null;
   observationCount: number;
   journalStatus: string;
+  execution: { available: boolean; busy: boolean; run: WorkflowRun | null; offers: Record<string, RunOffer> };
+  clipboard: ClipboardState;
 };
 
 export class PredictionDashboard {
@@ -31,6 +36,8 @@ export class PredictionDashboard {
     paused: false, status: "watching", page: null, activity: [], prediction: null,
     stale: false, requests: 0, error: null, desktop: null,
     tasks: [], taskLog: [], activeTaskId: null, observationCount: 0, journalStatus: "Session only",
+    execution: { available: false, busy: false, run: null, offers: {} },
+    clipboard: { status: clipboardEnabled() ? "waiting" : "disabled", context: null, lastUsedAt: null },
   };
   observer?: BrowserObserver;
   desktopObserver?: DesktopObserver;
@@ -45,6 +52,8 @@ export class PredictionDashboard {
   private abort?: AbortController;
   private urgent = false;
   readonly taskMemory = new TaskMemory();
+  runner?: WorkflowRunner;
+  private clipboardTimer?: ReturnType<typeof setTimeout>;
 
   constructor(private options: {
     predict?: typeof predictNext;
@@ -60,10 +69,48 @@ export class PredictionDashboard {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
   }
-  private publish() { this.listeners.forEach((listener) => listener(this.state)); }
+  private publish() {
+    this.state.execution = { available: !!this.runner, busy: this.runner?.busy || false, run: this.runner?.state || null,
+      offers: Object.fromEntries(this.state.tasks.map((task) => [task.id, workflowOffer(task)])) };
+    this.listeners.forEach((listener) => listener(this.state));
+  }
+
+  attachRunner(options: { driver: () => Promise<WorkflowDriver>; plan?: StepPlanner; journal?: WorkflowRunJournal; settleMs?: number }) {
+    if (this.runner) throw new Error("The workflow runner is already connected.");
+    this.runner = new WorkflowRunner({ ...options, getTask: (id) => this.taskMemory.tasks.find((task) => task.id === id),
+      item: async (id, item, status, reason, snapshot) => {
+        const record = this.taskMemory.recordExecution(id, item, status, reason, snapshot?.context, snapshot?.pageId);
+        this.state.tasks = this.taskMemory.tasks; this.state.taskLog = this.taskMemory.log;
+        this.state.observationCount = this.taskMemory.observations.length; this.state.activeTaskId = id;
+        if (this.options.journal) {
+          try { await this.options.journal.append(record); this.state.journalStatus = "Saved locally"; }
+          catch { this.state.journalStatus = "Local save failed"; throw new Error("The queue update could not be saved. Review before continuing."); }
+        }
+        this.publish();
+      },
+      change: () => this.publish(),
+      lock: (locked) => {
+        this.revision++; this.abort?.abort(); clearTimeout(this.timer); this.timer = undefined; this.pending = false;
+        this.observer?.suppress(locked || this.state.paused); this.desktopObserver?.setPaused(locked || this.state.paused);
+        this.state.stale = this.state.prediction !== null;
+        this.state.status = this.state.paused ? "paused" : "watching";
+        this.clearClipboard(locked || this.state.paused ? "paused" : "waiting");
+      },
+    });
+    this.publish();
+  }
+  get executionBusy() { return this.runner?.busy || false; }
+  approveWorkflow(taskId: string, token: string, inputs: Record<string, string>) {
+    if (this.stopped || this.state.paused) throw new RunRequestError("Resume watching before approving a workflow.");
+    if (!this.runner) throw new RunRequestError("The workflow runner is not connected.", 503);
+    if (!(this.options.isConfigured?.() ?? !!process.env.SUBQ_API_KEY?.trim())) throw new RunRequestError("Add SUBQ_API_KEY and restart before running workflows.", 400);
+    return this.runner.start(taskId, token, inputs);
+  }
+  pauseWorkflow() { this.runner?.pause(); }
+  finishExecution() { return this.runner?.settled() ?? Promise.resolve(); }
 
   observe(context: PageContext, page: Page) {
-    if (this.stopped || this.state.paused) return;
+    if (this.stopped || this.state.paused || this.executionBusy) return;
     if (!this.taskMemory.observe(context, page.pageId, this.state.activity)) return;
     this.state.observationCount = this.taskMemory.observations.length;
     this.target = page;
@@ -98,17 +145,43 @@ export class PredictionDashboard {
 
   async enableDesktopContext() { await this.desktopObserver?.requestPermission(); }
 
+  private clearClipboard(status: ClipboardState["status"]) {
+    clearTimeout(this.clipboardTimer); this.clipboardTimer = undefined;
+    this.state.clipboard = { status: clipboardEnabled() ? status : "disabled", context: null, lastUsedAt: null };
+  }
+  clipboardStatus(status: ClipboardState["status"]) {
+    if (this.stopped || this.state.paused || this.executionBusy || !clipboardEnabled()) return;
+    if (this.state.clipboard.status === status && !this.state.clipboard.context) return;
+    if (this.state.clipboard.context) { this.revision++; this.abort?.abort(); this.state.stale = this.state.prediction !== null; }
+    this.clearClipboard(status); this.publish();
+  }
+
   activity(event: Activity, page: Page) {
-    if (this.stopped || this.state.paused) return;
+    if (this.stopped || this.state.paused || this.executionBusy) return;
     this.target = page;
     this.revision++;
+    if (event.clipboard && ["copy", "cut", "paste", "clipboard-change", "clipboard-available"].includes(event.kind)) {
+      if (!clipboardEnabled()) return;
+      const data = sanitizeClipboard(event.clipboard);
+      this.clearClipboard(clipboardStatus(data));
+      this.state.clipboard.context = { ...data, time: event.time, operation: event.kind as ClipboardContext["operation"], pageId: page.pageId, url: event.url };
+      this.clipboardTimer = setTimeout(() => {
+        this.revision++; this.abort?.abort(); this.clearClipboard("waiting"); this.state.stale = this.state.prediction !== null; this.publish();
+      }, CLIPBOARD_TTL_MS);
+      this.clipboardTimer.unref();
+      // Raw text is transient prediction context, not activity history or
+      // workflow journal evidence. Only operation metadata is retained there.
+      const { text: _text, ...metadata } = data;
+      event = { ...event, clipboard: metadata };
+      this.abort?.abort();
+    }
     this.state.activity = [...this.state.activity, event].slice(-60);
     this.state.page = { title: this.state.page?.url === event.url ? this.state.page.title : "Browsing", url: event.url };
     this.state.stale = this.state.prediction !== null;
     this.state.error = null;
     if (!this.busy) this.state.status = "watching";
     this.publish();
-    if (["address-select", "address-focus", "address-edit"].includes(event.kind)) {
+    if (["address-select", "address-focus", "address-edit", "copy", "cut", "paste", "clipboard-change", "clipboard-available"].includes(event.kind)) {
       this.urgent = true;
       this.abort?.abort();
       this.schedule(100);
@@ -123,17 +196,18 @@ export class PredictionDashboard {
   }
 
   setPaused(paused: boolean) {
-    if (paused) this.abort?.abort();
+    if (paused) { this.abort?.abort(); this.runner?.pause("Watching was paused. Execution is stopping after its current browser action."); }
     this.state.paused = paused;
     this.revision++;
     this.state.status = paused ? "paused" : "watching";
     this.state.stale = this.state.prediction !== null;
-    this.observer?.suppress(paused);
-    this.desktopObserver?.setPaused(paused);
+    this.observer?.suppress(paused || this.executionBusy);
+    this.desktopObserver?.setPaused(paused || this.executionBusy);
     clearTimeout(this.timer);
     this.timer = undefined;
     this.pending = false;
     this.urgent = false;
+    this.clearClipboard(paused ? "paused" : "waiting");
     this.publish();
     if (!paused) this.schedule();
   }
@@ -141,7 +215,7 @@ export class PredictionDashboard {
   requestPrediction() { this.schedule(0); }
 
   private schedule(delay = this.options.debounceMs ?? 1400) {
-    if (this.stopped || this.state.paused || !this.target) return;
+    if (this.stopped || this.state.paused || this.executionBusy || !this.target) return;
     this.pending = true;
     clearTimeout(this.timer);
     if (!this.busy) {
@@ -152,7 +226,7 @@ export class PredictionDashboard {
 
   private async run() {
     this.timer = undefined;
-    if (this.stopped || this.state.paused || this.busy || !this.target) return;
+    if (this.stopped || this.state.paused || this.executionBusy || this.busy || !this.target) return;
     this.pending = false;
     this.urgent = false;
     if (!(this.options.isConfigured?.() ?? !!process.env.SUBQ_API_KEY?.trim())) {
@@ -182,7 +256,9 @@ export class PredictionDashboard {
       this.abort = new AbortController();
       const desktop = this.state.desktop?.pageId === page.pageId ? this.state.desktop : null;
       const observationVersion = this.taskMemory.observations.at(-1)?.id;
-      const prediction = await (this.options.predict ?? predictNext)(context, events, this.abort.signal, desktop, this.taskMemory.context(this.state.activity));
+      const clipboard = freshClipboard(this.state.clipboard) ? structuredClone(this.state.clipboard) : null;
+      if (clipboard) { this.state.clipboard.lastUsedAt = Date.now(); this.publish(); }
+      const prediction = await (this.options.predict ?? predictNext)(context, events, this.abort.signal, desktop, this.taskMemory.context(this.state.activity), clipboard);
       if (revision !== this.revision || this.stopped) return;
       // Detect navigations that happened between observation scans.
       if ((await readContext(page)).url !== context.url) { this.schedule(); return; }
@@ -217,11 +293,13 @@ export class PredictionDashboard {
   }
 
   stop() {
+    this.runner?.pause("The browser session is closing. No further actions will be started.");
     this.stopped = true;
     this.abort?.abort();
     this.revision++;
     clearTimeout(this.timer);
     this.listeners.clear();
+    this.clearClipboard("paused");
   }
 }
 
@@ -246,7 +324,29 @@ export async function startDashboard(controller: PredictionDashboard) {
     const route = path.slice(prefix.length);
     if (request.method === "POST") {
       if (request.headers.origin !== origin) { response.writeHead(403).end(); return; }
-      if (route === "pause") controller.setPaused(true);
+      if (route === "workflow-run") {
+        try {
+          if (!request.headers["content-type"]?.startsWith("application/json")) throw new RunRequestError("Use a JSON approval request.", 415);
+          const chunks: Buffer[] = []; let size = 0;
+          for await (const chunk of request) {
+            size += chunk.length; if (size > 8192) throw new RunRequestError("The approval request is too large.", 413);
+            chunks.push(Buffer.from(chunk));
+          }
+          let data: unknown;
+          try { data = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { throw new RunRequestError("The approval request is invalid.", 400); }
+          const parsed = z.object({ taskId: z.string().max(100), token: z.string().regex(/^[a-f0-9]{64}$/),
+            inputs: z.record(z.string().regex(/^[a-z][a-z0-9_]{0,39}$/), z.string().max(500)).default({}) }).safeParse(data);
+          if (!parsed.success) throw new RunRequestError("The approval request is invalid.", 400);
+          const run = controller.approveWorkflow(parsed.data.taskId, parsed.data.token, parsed.data.inputs);
+          response.writeHead(202, { "Content-Type": "application/json" }).end(JSON.stringify({ runId: run.id }));
+        } catch (error) {
+          response.writeHead(error instanceof RunRequestError ? error.status : 500, { "Content-Type": "application/json" })
+            .end(JSON.stringify({ error: error instanceof RunRequestError ? error.message : "The workflow could not be started." }));
+        }
+        return;
+      }
+      if (route === "workflow-pause") controller.pauseWorkflow();
+      else if (route === "pause") controller.setPaused(true);
       else if (route === "resume") controller.setPaused(false);
       else if (route === "predict") controller.requestPrediction();
       else if (route === "desktop-enable") {

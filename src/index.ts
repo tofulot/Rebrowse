@@ -7,6 +7,8 @@ import { PredictionDashboard, startDashboard } from "./dashboard.js";
 import { DesktopObserver } from "./desktop-context.js";
 import { resolve } from "node:path";
 import { TaskJournal } from "./tasks.js";
+import { browserWorkflowDriver } from "./workflow-browser.js";
+import { WorkflowRunJournal } from "./workflow-runner.js";
 
 const help = `
 Browse normally in the browser. Enter commands here:
@@ -42,6 +44,7 @@ async function main() {
     closing = true;
     terminal.close();
     predictions.stop();
+    await predictions.finishExecution();
     await predictions.flushTasks();
     await desktop?.stop();
     await observer?.stop();
@@ -64,13 +67,17 @@ async function main() {
 
   try {
     agent = await connectAgent(browser);
+    predictions.attachRunner({ driver: async () => browserWorkflowDriver(browser.context, agent!),
+      journal: new WorkflowRunJournal(resolve("session-data/workflow-runs.jsonl")) });
     dashboard = await startDashboard(predictions);
     observer = new BrowserObserver(browser.context, dashboard.origin,
       (event, page) => predictions.activity(event, page),
       (message) => predictions.reportError(message),
-      (context, page) => predictions.observe(context, page));
+      (context, page) => predictions.observe(context, page),
+      (status) => predictions.clipboardStatus(status));
     predictions.observer = observer;
     desktop = new DesktopObserver(resolve("browser-data"), (state) => {
+      void observer?.sampleClipboard(state.sample).catch(() => {});
       void observer?.activeContentPage().then((page) => {
         const source = page ?? (state.sample?.focus === "address-bar" ? observer?.lastPage : undefined);
         predictions.desktop({ ...state, pageId: source?.pageId ?? null });
@@ -111,6 +118,7 @@ async function main() {
           const active = foreground && !(await foreground.url()).startsWith(dashboard.origin)
             ? foreground : observer.lastPage;
           if (!active) throw new Error("Open a browser tab first.");
+          if (predictions.executionBusy && ["goto", "act", "observe"].includes(command)) throw new Error("Pause the running workflow before using manual browser commands.");
           if (command === "goto") await active.goto(webUrl(instruction));
           else if (command === "snapshot") console.log((await active.snapshot()).formattedTree);
           else if (command === "act" || command === "observe") {

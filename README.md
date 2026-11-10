@@ -2,7 +2,7 @@
 
 A local Stagehand + TypeScript starter for a browser that anticipates your next action.
 
-Opens a visible browser and a second tab with a live prediction dashboard. Browse normally: the app observes activity and asks SubQ what you might do next. You can also inspect pages or execute explicit commands from the terminal. Predictions do **not** automatically execute actions.
+Opens a visible browser and a second tab with a live prediction dashboard. Browse normally: the app observes activity and asks SubQ what you might do next. You can approve a suggested workflow to run its remaining queue, or inspect pages and execute explicit commands from the terminal. Predictions do **not** automatically execute actions.
 
 ## Run
 
@@ -40,7 +40,19 @@ quit
 
 Predictions run after a short activity pause, normally at most once every five seconds, with one request in flight. Address-bar focus/selection is a priority signal: it cancels an older inference and bypasses that cooldown. Old results are discarded when newer activity arrives. The dashboard does not observe itself. Confidence scores are model estimates, not calibrated probabilities or measured accuracy. The explanation is a user-facing summary, not the model's private internal reasoning.
 
-Activity history stays in memory (last 60 events). Recent events and a bounded page context—title, headings, visible action labels, and paragraph excerpts—are sent to SubQ for predictions. Page form values, passwords, and editable page text are excluded. Navigated page URLs have query strings and fragments stripped. Address-bar contents are intentionally read separately and sent to SubQ as described below. Page text can still contain personal information. The dashboard is served on loopback with a random session URL; nothing is published. Pausing stops new events and aborts pending inference. Page observation covers top-level HTTP(S) pages; embedded frames and internal-page DOM are not tracked. A newly opened tab can take about a second to attach.
+Activity history stays in memory (last 60 events). Recent events and a bounded page context—title, headings, visible action labels, and paragraph excerpts—are sent to SubQ for predictions. Ordinary observation excludes page form values, passwords, and editable page text. Explicit safe clipboard transfers and address-bar contents are intentionally read separately and can be sent to SubQ as described below. Navigated page URLs have query strings and fragments stripped; clipboard text can itself contain full URLs. Page text can still contain personal information. The dashboard is served on loopback with a random session URL; nothing is published. Pausing stops new events and aborts pending inference. Page observation covers top-level HTTP(S) pages; embedded frames and internal-page DOM are not tracked. A newly opened tab can take about a second to attach.
+
+## Clipboard context
+
+The browser watches trusted **copy**, **cut**, and **paste** events in browsing pages. It captures the explicit transferred text (including a selected portion of a normal text/search field), not arbitrary field values or general typing. The dashboard's **Clipboard context** card shows the recent text, operation, target, source, timestamp, truncation, and whether it was included in a prediction request. Copying **Jamie Chen** from a prospect list then focusing LinkedIn search can produce a prediction to paste/search that name; a paste event describes an observed transfer, not a successful search submission or completed workflow.
+
+On macOS, the native helper reports clipboard change-count metadata while this browser is foreground. Before reading text through Stagehand's clipboard API, the browser adapter checks the active browsing tab and excludes protected fields/selections. Reads are checked again after completion so a pause, focus change, or newer clipboard version discards an old result. The helper also observes only **Cmd+C**, **Cmd+X**, and **Cmd+V** shortcuts in this browser's address bar/controls, using the existing Accessibility access; it does not inspect other key characters. Page shortcuts use page events. Menu-based address-bar paste may instead appear as an address edit, which can suggest a possible paste when it matches the clipboard. Other applications and ordinary dashboard page interactions are excluded.
+
+An initial clipboard read or change without an observed shortcut is labeled **available** or **changed**, with its source unknown; it is not claimed to be a copy from the current page or a confirmed paste. The system path requires macOS browser-focus signals; other platforms or disabled desktop observation retain page copy/cut/paste detection. Text-only clipboard reading does not capture images or files, and unsupported/denied reads leave ordinary observation working.
+
+Text is limited to **2048 characters**, expires after **two minutes**, and clears when watching is paused, the browser loses foreground, or an approved workflow starts controlling its tab. Transfers involving recognized password, payment/autocomplete, one-time-code, `data-private`, or `data-sensitive` fields are excluded before their data is read. Obvious API keys, bearer tokens, private keys, and credential assignments are also excluded; this is a heuristic, not a guarantee that arbitrary clipboard text contains no private information. Safe copied/pasted text is sent to SubQ for predictions, so it can contain names or other personal information.
+
+The last transfer text stays only in transient prediction context; the activity stream and workflow observation history keep operation metadata without raw clipboard payloads. Model-generated summaries/task assessments can still mention a copied name or other relevant data. Clipboard text is untrusted data and never authorizes actions, starts a workflow, establishes an item outcome, or changes an approved run. Set `REBROWSE_CLIPBOARD_CONTEXT=false` in `.env` and restart to disable this feature. **Pause watching** also suspends it and clears its context.
 
 ## Repeatable task detection
 
@@ -57,7 +69,7 @@ Assessments require an estimated confidence of at least 70% and citations to rea
 
 A total is established only from a cited complete, untruncated list whose observed row count matches it and whose rows map to known item identities. Partial/paginated lists, unreadable canvas-based lists, and lists outside the observed browser cannot establish a full count. Remaining names must occur in the observed source list or a supported item cycle. Unknown progress stays unknown rather than inventing names or declaring completion. These are AI assessments of limited observations, not guaranteed task recognition. Fast page changes can occur before a snapshot is captured.
 
-New detections and meaningful progress/status changes are appended locally to ignored `session-data/repeatable-tasks.jsonl`, including timestamps, confidence, steps, item outcomes, remaining work, and cited evidence. These records can contain names and page text. The dashboard's **Download journal** exports a Markdown report of the current session's last 60 detection updates. The JSONL journal persists across restarts; inference memory starts fresh in each session. Pausing stops new observation/detection. Nothing is published or sent to LinkedIn, and no predicted action is executed. The observed context is sent to SubQ for analysis.
+New detections and meaningful progress/status changes are appended locally to ignored `session-data/repeatable-tasks.jsonl`, including timestamps, confidence, steps, item outcomes, remaining work, and cited evidence. These records can contain names and page text. The dashboard's **Download journal** exports a Markdown report of the current session's last 60 detection updates. The JSONL journal persists across restarts; inference memory starts fresh in each session. Pausing stops new observation/detection. Nothing is published. Predictions do not act; separately approved workflows can interact with the actual websites, including submitting the observed connection request. The observed context is sent to SubQ for analysis.
 
 ## Work queue and stopping assessment
 
@@ -72,7 +84,7 @@ The assessment suggests **Continue** when a ready or in-progress item exists, **
 
 Duplicate names are counted once (case and whitespace normalized). Exact totals require every observed source row to map to one known identity. Unknown or partial scope shows **At least N remaining · Total unknown**. A shrinking list does not erase outstanding items. A different source list or cycles outside the source trigger review instead of transferring earlier completions into a new run. Items with identical names are treated as one identity in this prototype; workflows requiring disambiguation need richer item identifiers.
 
-Queue states and meaningful stopping changes are saved with the detection journal and included in its Markdown export. This is a prediction of how the task might continue or end; watching continues until you pause it. There is no queue runner, retry action, or automatic submission.
+Queue states and meaningful stopping changes are saved with the detection journal and included in its Markdown export. The queue assessment predicts how the task might continue or end; it never starts execution. Watching continues until you pause it. A separate explicit approval is required to run the remaining queue as described below.
 
 ## Suggested reusable workflows
 
@@ -87,7 +99,19 @@ SubQ suggests the draft's description, inputs and checks during the existing pre
 
 Open **Review steps, checks and stopping rules** to inspect it, or use **Download draft** to export the Markdown template. Drafts have stable IDs and versions, remain stable as ordinary progress updates arrive, and are revised when the observed pattern or evidence quality changes. They are included in the local JSONL journal and **Download journal** report. Completing the current list does not prevent a draft being reused for a future list; completion state is not carried into a new run.
 
-Every draft is marked `status: draft` and `execution: disabled` by the app. There is no Run button, workflow executor, schedule, or automatic action associated with these suggestions. Reviewing, downloading, or detecting a workflow never sends connection requests or performs any proposed step.
+Every reusable template stays marked `status: draft` and `execution: disabled`; it does not execute by itself. Reviewing, downloading, detecting, or changing confidence never starts actions. **Approve & run** creates a separate, bounded execution of that template version for the currently displayed queue.
+
+## Approving and running a workflow
+
+Review the suggested steps, checks, source URL, and listed remaining items, fill any additional inputs, then click **Approve & run**. This click authorizes actual browser interactions for that workflow version and those queue items, including its observed submission step. The runner opens its own tab, skips confirmed items, and processes one remaining item at a time. In-progress items are rechecked from the approved source; an existing confirmed outcome is never assumed to need resubmission. Approval is refused if the reviewed version or queue changed, another run is active, the full source is unknown, or any item needs review. A new input list is not silently included in an earlier approval.
+
+The live **Approved execution** card shows the current item, step, action count, verified completions, and run activity. The runner checks the live source membership before each item, asks SubQ about one step at a time, resolves one Stagehand action, checks its target, and executes that single Action object. It verifies the visible result before moving on. Human observation and predictions are suspended while a run controls its tab; execution observations and outcomes are labeled as workflow activity rather than human repetition.
+
+Execution stops when the work queue confirms every item complete. A missing or ambiguous match, login challenge, changed list/workflow, unsupported action, unconfirmed submission, repeated action, or bounded step limit pauses the run for review. It does not automatically retry uncertain actions or skip unresolved items. After a final-step click, key press, or selection, another action requires review unless the outcome is confirmed; a new confirmation dialog at that point can require manual completion. Actions are limited to the websites seen in the approved task, and links opening new tabs/windows or sensitive fields require manual review. This first runner supports readable DOM lists and common single page interactions; incomplete/canvas lists and richer identity matching can require manual work.
+
+Use **Pause workflow** to stop dispatching more actions. An already dispatched click or submission may finish; the runner keeps its lock until the operation settles and checks its visible outcome. **Pause watching** and closing the session also stop further execution. Review the owned workflow tab, resolve outstanding outcomes, then refresh predictions and approve the remaining ready queue. Runs never resume automatically, including after restart. Manual terminal `goto`, `observe`, and `act` commands are blocked while the runner is busy.
+
+The frozen item list, approved version, action dispatches, outcome checks, and final complete/paused state are saved to ignored `session-data/workflow-runs.jsonl`. Item states and named outcomes also update the task journal. Local records can contain item names, page text, and action descriptions. A run-log write failure pauses further dispatch. SubQ planning and Stagehand observation use the configured `subq-preview` model and API key; a run makes additional model calls and uses API credits.
 
 ## Browser-level signals on macOS
 
@@ -99,7 +123,7 @@ After about 450ms without another text change, an address-edit event triggers an
 
 The browsing and dashboard tabs can be moved into separate windows. Browser-control signals follow Chrome's active tab in its last-focused window, even when address-bar focus means the document itself is unfocused. Address-bar activity in the dashboard window is also accepted, using the last browsed page as background context; ordinary dashboard content remains excluded. The native helper services macOS's main run loop so foreground-window state refreshes as you switch windows or applications. It reports inaccessible focus data and an active Chrome process from a different profile separately instead of silently showing ready.
 
-If the dashboard says access is needed, click **Enable address-bar signals**, then allow Accessibility in **System Settings → Privacy & Security → Accessibility** for the app macOS identifies (often your terminal or Codex). Restart Rebrowse after changing access if it still shows unavailable. No Screen Recording or keystroke collection is used. Pointer/focus samples from other applications are not emitted. Pause watching also suspends the helper.
+If the dashboard says access is needed, click **Enable address-bar signals**, then allow Accessibility in **System Settings → Privacy & Security → Accessibility** for the app macOS identifies (often your terminal or Codex). Restart Rebrowse after changing access if it still shows unavailable. No Screen Recording or general keystroke recording is used; the clipboard feature recognizes only the three browser-control shortcuts described above. Pointer/focus samples from other applications are not emitted. Pause watching also suspends the helper.
 
 The helper is built on first launch into ignored `.cache/` and needs Apple's Swift compiler (Command Line Tools). Set `REBROWSE_DESKTOP_CONTEXT=false` to disable it. Other operating systems retain page-only observation for now. These browser-control signals require a native companion if this project later becomes a Chrome extension.
 
@@ -115,6 +139,8 @@ npm test
 npm run smoke
 npm run smoke:predictions
 npm run smoke:workflow
+npm run smoke:runner
+npm run smoke:clipboard
 ```
 
 The smoke check launches a headless browser with a temporary profile, visits a local test page, clicks a button, and verifies page state and its snapshot. It makes no AI calls.
@@ -126,6 +152,10 @@ Run `npm run smoke:subq` to additionally verify live SubQ `observe` and `act` ca
 The live prediction check also injects address-bar selection and text-edit signals, verifies that SubQ predicts search/navigation using the entered `wasd` query, and checks that the text is visible in the dashboard. `npm run smoke:desktop` is an interactive macOS check: it opens an isolated browser titled **Rebrowse browser-controls test**; activate that window and press Cmd+L within 90 seconds. It verifies native selection detection and the resulting live prediction, and uses API credits.
 
 `npm run smoke:workflow` replays a three-name workflow on local test pages with simulated inference. `npm run smoke:workflow:subq` uses actual SubQ inference. Both verify cross-page memory, two confirmed local invitation outcomes, the unprocessed third name, a review-only reusable draft, step/parameter checks, local journal and draft exports, and responsive layout. They verify that reviewing/downloading the draft does not process the third person, then use explicit test-driver navigation/clicks to check a blocker, an in-progress item, and the final finish assessment. The predictor performs no actions. They never visit or send requests on real LinkedIn. Live checks use API credits.
+
+`npm run smoke:runner` clicks the dashboard approval button and verifies actual Stagehand Action execution on local fixture pages with simulated planning. It checks skipped completed items, multiple remaining items, named outcomes, automatic stopping, a missing-match pause, local journals, and responsive run controls. `npm run smoke:runner:subq` uses actual SubQ step planning and Stagehand observation to complete a local fixture queue. Neither visits real LinkedIn; live checks use API credits.
+
+`npm run smoke:clipboard` verifies actual browser copy/cut/paste, clipboard reading, copied-name predictions, protected fields, injected native clipboard metadata, context preview, pause and responsive layout. `npm run smoke:clipboard:subq` uses live SubQ predictions. The test uses isolated local pages and a temporary headless browser; on macOS it preserves native clipboard formats in process memory and restores them only when the test still owns the last write. Native shortcut emission depends on macOS Accessibility and is not simulated as a real OS keyboard action by this check.
 
 ## Next build
 

@@ -2,9 +2,11 @@ const $ = (id) => document.getElementById(id);
 let state;
 let lastPredictionTime;
 let lastWorkflowRender;
+let lastInputDraft;
+let approving = false;
 const statusNames = { watching: 'Watching', collecting: 'Reading context', predicting: 'Predicting', ready: 'Watching', paused: 'Paused', error: 'Needs attention', 'needs-key': 'Key needed' };
 const stages = { watching: 'Listening for activity', collecting: 'Reading the current page', predicting: 'Estimating the next move', ready: 'Prediction updated', paused: 'Observation paused', error: 'Prediction unavailable', 'needs-key': 'Waiting for API key' };
-const icons = { click: '↗', hover: '⌁', edit: '⌨', focus: '⊡', scroll: '↕', navigate: '→', tab: '▣', 'address-select': '⌘', 'address-focus': '⌕', 'address-edit': '⌨', 'pointer-dwell': '⌁', 'browser-focus': '▣' };
+const icons = { click: '↗', hover: '⌁', edit: '⌨', focus: '⊡', scroll: '↕', navigate: '→', tab: '▣', copy: '▤', cut: '✂', paste: '↧', 'clipboard-available': '⎘', 'clipboard-change': '⎘', 'address-select': '⌘', 'address-focus': '⌕', 'address-edit': '⌨', 'pointer-dwell': '⌁', 'browser-focus': '▣' };
 const element = (tag, className, text) => { const node = document.createElement(tag); node.className = className; if (text !== undefined) node.textContent = text; return node; };
 function render(next) {
   state = next;
@@ -16,11 +18,14 @@ function render(next) {
   $('page-url').textContent = state.page?.url || 'Browse in the other tab to begin.';
   $('page-url').title = state.page?.url || '';
   $('pause').textContent = state.paused ? 'Resume watching  ▶' : 'Pause watching  Ⅱ';
-  $('predict').disabled = state.paused || !state.page || ['collecting', 'predicting', 'needs-key'].includes(state.status);
+  $('predict').disabled = state.paused || state.execution?.busy || !state.page || ['collecting', 'predicting', 'needs-key'].includes(state.status);
+  $('browser-mode').textContent = state.execution?.busy ? 'Approved workflow running' : 'Observe & predict';
   $('thinking-state').textContent = stages[state.status];
   $('event-count').textContent = String(state.activity.length);
   $('requests').textContent = `${state.requests} predictions requested`;
   renderWorkflow(state);
+  renderExecution(state);
+  renderClipboard(state.clipboard);
   $('error').hidden = !state.error;
   $('error').textContent = state.error || '';
   const desktop = state.desktop;
@@ -76,6 +81,23 @@ function render(next) {
       return row;
     }));
   }
+}
+function renderClipboard(clipboard) {
+  const context = clipboard?.context;
+  const labels = { waiting: 'WAITING', ready: 'RECENT TEXT', redacted: 'TEXT EXCLUDED', empty: 'NO TEXT', unavailable: 'TEXT UNAVAILABLE', inactive: 'BROWSER IN BACKGROUND', paused: 'PAUSED', disabled: 'DISABLED' };
+  $('clipboard-status').textContent = labels[clipboard?.status] || 'WAITING';
+  const operations = { copy: 'Copied', cut: 'Cut', paste: 'Pasted', 'clipboard-available': 'Available clipboard text', 'clipboard-change': 'Clipboard changed' };
+  $('clipboard-message').textContent = context ? `${operations[context.operation]}${context.redacted ? ' · content excluded' : context.format === 'non-text' ? ' · images/files are not read' : clipboard?.status === 'empty' ? ' · no plain text available' : context.truncated ? ' · showing the first 2048 characters' : ''}`
+    : clipboard?.status === 'paused' ? 'Clipboard observation is paused and its text has been cleared.'
+    : clipboard?.status === 'inactive' ? 'Other apps are not observed. Clipboard text is read when the Rebrowse browser is in front.'
+    : clipboard?.status === 'disabled' ? 'Clipboard context is disabled in settings.'
+    : clipboard?.status === 'redacted' ? 'The focused field or selection is protected. Clipboard text was not read.'
+    : clipboard?.status === 'unavailable' ? 'Clipboard text could not be read. Page copy and paste events remain available.'
+    : 'Copy or paste in your browsing tab to add context.';
+  $('clipboard-preview').hidden = clipboard?.status !== 'ready' || !context?.text;
+  $('clipboard-text').textContent = clipboard?.status === 'ready' ? context?.text || '' : '';
+  $('clipboard-origin').textContent = context ? `${context.source === 'system' ? 'System clipboard' : 'Page transfer'} · ${context.target.replaceAll('-', ' ')} · ${new Date(context.time).toLocaleTimeString()}${context.operation.startsWith('clipboard-') ? ' · source not observed' : ''}` : '';
+  $('clipboard-used').textContent = clipboard?.lastUsedAt ? 'Included in the latest prediction request' : context && clipboard?.status === 'ready' ? 'Waiting for the next prediction' : '';
 }
 function renderWorkflow(state) {
   $('workflow-observations').textContent = `${state.observationCount || 0} page observations remembered`;
@@ -144,6 +166,14 @@ function renderWorkflow(state) {
       $('draft-review').replaceChildren(...draft.reviewNotes.map((note) => element('li', '', note)));
       $('draft-version').textContent = `Suggestion v${draft.version} · Review only · Not executed`;
       $('draft-download').href = `./workflow/${encodeURIComponent(task.id)}.md`;
+      const inputKey = `${task.id}:${draft.version}`;
+      if (inputKey !== lastInputDraft) {
+        lastInputDraft = inputKey;
+        $('run-inputs').replaceChildren(...draft.inputs.filter((input) => !['items', 'item', 'source_url'].includes(input.name)).map((input) => {
+          const label = element('label', 'run-input'); label.append(element('span', '', `${input.name} — ${input.description}`));
+          const field = element('input', ''); field.type = 'text'; field.name = input.name; field.maxLength = 500; field.autocomplete = 'off'; label.append(field); return label;
+        }));
+      }
     }
   }
   const log = state.taskLog || [];
@@ -153,6 +183,30 @@ function renderWorkflow(state) {
     row.append(element('time', '', new Date(entry.updatedAt).toLocaleTimeString()), element('strong', '', `${entry.title} · ${Math.round(entry.confidence * 100)}%`),
       element('span', '', `${entry.status} · ${entry.cycles.length} item cycles · ${entry.completedItems.length} confirmed · ${entry.remainingCount ?? 'unknown'} remaining`));
     return row;
+  }));
+}
+function currentTask() { return state?.tasks?.find((task) => task.id === state.activeTaskId) || state?.tasks?.[0]; }
+function renderExecution(state) {
+  const task = currentTask(); const execution = state.execution;
+  const offer = task && execution?.offers?.[task.id]; const run = execution?.run;
+  $('workflow-approve').disabled = approving || !execution?.available || execution.busy || state.paused || !offer?.canRun;
+  $('workflow-approve').textContent = approving ? 'Starting…' : 'Approve & run ↗';
+  $('run-offer').textContent = !execution?.available ? 'Workflow execution is not connected in this session.' : state.paused ? 'Resume watching to approve a workflow.' : offer?.reason || 'A detected task is needed before running.';
+  $('run-scope').textContent = task ? `Source: ${task.workQueue.source?.url || 'Unknown'} · Remaining items: ${task.workQueue.items.filter((item) => item.state === 'unstarted' || item.state === 'in_progress').map((item) => item.item).join(', ') || 'None ready'}` : '';
+  if (task?.workflowDraft) $('draft-version').textContent = run?.taskId === task.id && run.version === task.workflowDraft.version
+    ? `Suggestion v${task.workflowDraft.version} · Approved run: ${run.status}` : `Suggestion v${task.workflowDraft.version} · Not executed · Approval required`;
+  $('workflow-run').hidden = !run;
+  if (!run) return;
+  const labels = { running: 'RUNNING', pausing: 'PAUSING · CURRENT ACTION MAY FINISH', paused: 'PAUSED · REVIEW NEEDED', complete: 'COMPLETE · STOPPED' };
+  $('run-title').textContent = `Workflow v${run.version}`;
+  $('run-status').textContent = labels[run.status]; $('run-status').dataset.status = run.status;
+  $('run-message').textContent = run.message;
+  $('run-progress').textContent = `${run.completedItems.length} of ${run.approvedItems.length} approved items confirmed · ${run.actionCount} browser actions${run.item ? ` · ${run.item}, step ${run.step}` : ''}`;
+  $('workflow-run-pause').hidden = !execution.busy;
+  $('workflow-run-pause').disabled = run.status === 'pausing';
+  $('run-review').hidden = run.status !== 'paused';
+  $('run-log').replaceChildren(...run.log.slice(-20).reverse().map((entry) => {
+    const row = element('li', ''); row.append(element('time', '', new Date(entry.time).toLocaleTimeString()), element('span', '', entry.message)); return row;
   }));
 }
 const stream = new EventSource('./events');
@@ -165,6 +219,19 @@ async function command(name) {
     if (!response.ok) throw new Error('Command failed. Reconnect to the local session.');
   } catch (error) { $('error').hidden = false; $('error').textContent = error.message; }
 }
+async function approveWorkflow() {
+  const task = currentTask(); const offer = task && state.execution?.offers?.[task.id];
+  if (approving || !task || !offer?.canRun || state.execution?.busy) return;
+  const approval = { taskId: task.id, token: offer.token, inputs: Object.fromEntries([...$('run-inputs').querySelectorAll('input')].map((input) => [input.name, input.value])) };
+  approving = true; renderExecution(state);
+  try {
+    const response = await fetch('./workflow-run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(approval) });
+    if (!response.ok) { const result = await response.json(); throw new Error(result.error || 'The workflow could not be started.'); }
+  } catch (error) { $('error').hidden = false; $('error').textContent = error.message; }
+  finally { approving = false; renderExecution(state); }
+}
 $('pause').onclick = () => command(state?.paused ? 'resume' : 'pause');
 $('predict').onclick = () => command('predict');
 $('desktop-enable').onclick = () => command('desktop-enable');
+$('workflow-approve').onclick = approveWorkflow;
+$('workflow-run-pause').onclick = () => command('workflow-pause');

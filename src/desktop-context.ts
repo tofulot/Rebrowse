@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import { z } from "zod";
+import { clipboardEnabled } from "./clipboard-context.js";
 
 const pointerSchema = z.object({
   x: z.number(), y: z.number(), space: z.enum(["screen", "browser-window"]),
@@ -17,6 +18,8 @@ export const desktopSampleSchema = z.object({
   addressSelected: z.boolean(), pointer: pointerSchema.optional(),
   focusAvailable: z.boolean().optional(), otherBrowserActive: z.boolean().optional(),
   addressText: z.string().max(2048).optional(),
+  clipboardVersion: z.number().int().optional(),
+  clipboardShortcut: z.object({ id: z.number().int().positive(), kind: z.enum(["copy", "cut", "paste"]), target: z.enum(["address-bar", "browser-controls"]) }).optional(),
 });
 export type DesktopSample = z.infer<typeof desktopSampleSchema>;
 export type DesktopState = {
@@ -107,7 +110,7 @@ export class DesktopObserver {
       const lock = await readlink(resolve(this.profile, "SingletonLock"));
       const pid = lock.match(/-(\d+)$/)?.[1];
       if (!pid) throw new Error("Could not identify this browser process.");
-      this.process = spawn(this.executable, ["--pid", pid], { stdio: ["ignore", "pipe", "ignore"] });
+      this.process = spawn(this.executable, ["--pid", pid, ...(clipboardEnabled() ? ["--clipboard-context"] : [])], { stdio: ["ignore", "pipe", "ignore"] });
       const lines = createInterface({ input: this.process.stdout! });
       if (this.paused) this.process.kill("SIGSTOP");
       lines.on("line", (line) => {
@@ -124,6 +127,7 @@ export class DesktopObserver {
   private consume(sample: DesktopSample) {
     // Defense in depth: even a malformed helper cannot attach page input text.
     if (!sample.active || sample.focus !== "address-bar") delete sample.addressText;
+    const clipboardChanged = sample.clipboardVersion !== this.state.sample?.clipboardVersion || sample.clipboardShortcut !== undefined;
     this.state.sample = sample;
     const textChanged = sample.addressText !== undefined && sample.addressText !== this.state.addressInput?.text;
     if (sample.addressText !== undefined) this.state.addressInput = { text: sample.addressText, time: sample.time };
@@ -132,7 +136,7 @@ export class DesktopObserver {
     } else this.state.path = [];
     const events = this.signals.consume(sample);
     const status = !sample.accessibility ? "permission-needed" : sample.active && sample.focusAvailable === false ? "focus-unavailable" : sample.active ? "ready" : "inactive";
-    if (textChanged || events.length || Date.now() - this.lastPublish >= 300 || status !== this.state.status) {
+    if (clipboardChanged || textChanged || events.length || Date.now() - this.lastPublish >= 300 || status !== this.state.status) {
       this.lastPublish = Date.now();
       this.publish(status, !sample.accessibility
         ? "Enable macOS Accessibility to detect address-bar focus and selection."

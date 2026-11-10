@@ -74,7 +74,7 @@ export function buildWorkflowDraft(task: Omit<TaskRecord, "workflowDraft">, prop
 export function workflowDraftReport(draft: WorkflowDraft, heading = "#") {
   const safe = (text: string) => text.replace(/[\r\n]/g, " ");
   return [
-    `${heading} ${safe(draft.title)}`, "", "DRAFT SUGGESTION — REVIEW ONLY. Execution is disabled; no actions are executed by this draft.",
+    `${heading} ${safe(draft.title)}`, "", "DRAFT SUGGESTION — REVIEW ONLY. This template does not execute itself. Running requires separate explicit approval in Rebrowse for a specific version and queue.",
     `Version: ${draft.version} · Suggested: ${new Date(draft.updatedAt).toISOString()}`, "", safe(draft.summary), "",
     `${heading}# Inputs`, ...draft.inputs.map((input) => `- \`{{${input.name}}}\`: ${safe(input.description)}`), "",
     `${heading}# Repeated sequence`, safe(draft.loop), "", ...draft.steps.flatMap((step, index) => [

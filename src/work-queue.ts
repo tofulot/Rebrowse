@@ -142,7 +142,7 @@ export function buildWorkQueue(candidate: TaskHypothesis, cycles: TaskHypothesis
   return { source, scope, scopeReason, items: queueItems,
     counts: { known: queueItems.length, confirmed, ready, inProgress, blocked, knownRemaining, remaining: verified ? knownRemaining : null, total: verified ? queueItems.length : null },
     decision, reason, nextItem: next?.item || null,
-    completionRule: "Finish only when the complete source list is established and every unique item has a confirmed outcome. Unresolved items require review; an empty visible page does not prove completion. Execution stays disabled." };
+    completionRule: "Finish only when the complete source list is established and every unique item has a confirmed outcome. Unresolved items require review; an empty visible page does not prove completion. Predictions alone never execute actions." };
 }
 
 export function workQueueReport(queue: WorkQueue) {

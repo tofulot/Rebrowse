@@ -29,11 +29,11 @@ export const taskHypothesisSchema = z.object({
   workQueue: queueProposalSchema.nullable().catch(null),
 });
 export type TaskHypothesis = z.infer<typeof taskHypothesisSchema>;
-export type Observation = { id: number; time: number; pageId: string; context: PageContext; events: Activity[] };
+export type Observation = { id: number; time: number; pageId: string; context: PageContext; events: Activity[]; actor?: "user" | "workflow" };
 export type TaskRecord = {
   id: string; sessionId: string; detectedAt: number; updatedAt: number;
   title: string; confidence: number; steps: string[]; reason: string;
-  cycles: TaskHypothesis["cycles"]; completedItems: string[]; totalItems: number | null;
+  cycles: Array<TaskHypothesis["cycles"][number] & { actor?: "workflow" }>; completedItems: string[]; totalItems: number | null;
   remainingItems: string[]; remainingCount: number | null; currentItem: string | null;
   nextStep: string; status: "suspected" | "repeating" | "uncertain" | "complete";
   evidence: Array<{ id: number; time: number; title: string; url: string; signals: string }>;
@@ -43,6 +43,20 @@ export type TaskRecord = {
 export type WorkflowContext = { observations: Observation[]; knownTasks: TaskRecord[]; recentActivity: Activity[] };
 const key = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
 
+export function hasConfirmedOutcome(context: PageContext, item: string) {
+  const includesName = (text: string) => new RegExp(`(?<![\\p{L}\\p{N}_])${key(item).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}_])`, "u").test(key(text));
+  const namedHeading = includesName([context.title, ...context.headings].join(" "));
+  const sentences = context.excerpt.split(/[.!?\n]/);
+  const negative = /\b(no|not|never|failed|unable)\b/i;
+  const outcome = /\b(invitation|request|message|email|form|record|changes|item|task)\s+(successfully\s+)?(sent|submitted|saved|completed|processed)\b/i;
+  const contradicted = sentences.some((text) => negative.test(text) && /\b(invitation|request|message|email|form|record|item|task)\b/i.test(text)
+    && /\b(sent|submitted|saved|completed|processed)\b/i.test(text));
+  if (contradicted) return false;
+  const positiveAction = namedHeading && context.actions.some((action) => /^(pending|connected|sent|saved|completed|done|processed|submitted|success)[.!✓✔]?$/i.test(action.trim()));
+  const positiveText = sentences.some((text) => !negative.test(text) && outcome.test(text) && (namedHeading || includesName(text)));
+  return positiveAction || positiveText;
+}
+
 export class TaskMemory {
   readonly sessionId = randomUUID();
   readonly observations: Observation[] = [];
@@ -51,14 +65,16 @@ export class TaskMemory {
   private sequence = 0;
   private lastFingerprint = "";
 
-  observe(context: PageContext, pageId: string, events: Activity[], time = Date.now()) {
+  observe(context: PageContext, pageId: string, events: Activity[], time = Date.now(), actor: "user" | "workflow" = "user") {
     context = { ...context, headings: context.headings.slice(0, 10), actions: context.actions.slice(0, 30), excerpt: context.excerpt.slice(0, 1600),
       lists: context.lists?.slice(0, 3).map((list) => ({ ...list, items: list.items.slice(0, 30).map((item) => item.slice(0, 160)), truncated: list.truncated || list.items.length > 30 })) };
-    const fingerprint = JSON.stringify({ pageId, context });
+    const fingerprint = JSON.stringify({ pageId, context, actor });
     if (fingerprint === this.lastFingerprint) return false;
     this.lastFingerprint = fingerprint;
-    this.observations.push({ id: ++this.sequence, time, pageId, context,
-      events: events.filter((event) => event.pageId === pageId && time - event.time < 15000).slice(-8).map(({ addressText, ...event }) => ({ ...event, ...(addressText === undefined ? {} : { addressText: addressText.slice(0, 200) }) })) });
+    this.observations.push({ id: ++this.sequence, time, pageId, context, actor,
+      events: events.filter((event) => event.pageId === pageId && time - event.time < 15000).slice(-8).map(({ addressText, clipboard, ...event }) => ({ ...event,
+        ...(clipboard ? { clipboard: { format: clipboard.format, source: clipboard.source, target: clipboard.target, truncated: clipboard.truncated, redacted: clipboard.redacted } } : {}),
+        ...(addressText === undefined ? {} : { addressText: addressText.slice(0, 200) }) })) });
     if (this.observations.length > 80) this.observations.shift();
     return true;
   }
@@ -87,12 +103,8 @@ export class TaskMemory {
       });
       if (!evidenceIds.length) continue;
       const outcomeFrame = cycle.outcomeEvidenceId === null ? undefined : frames.get(cycle.outcomeEvidenceId);
-      const outcomeText = outcomeFrame ? [outcomeFrame.context.title, ...outcomeFrame.context.headings, outcomeFrame.context.excerpt].join(" ") : "";
-      const outcomeVisible = outcomeFrame && (outcomeFrame.context.actions.some((action) => /^(pending|connected|sent|saved|completed|done|processed|submitted|success)\b/i.test(action))
-        || outcomeText.split(/[.!?\n]/).some((text) => !/\b(no|not|never|failed|unable)\b/i.test(text)
-          && /\b(invitation|request|message|email|form|record|changes|item|task)\s+(successfully\s+)?(sent|submitted|saved|completed|processed)\b/i.test(text)));
       const confirmed = cycle.outcome === "confirmed" && outcomeFrame && cycle.outcomeEvidenceId !== null && evidenceIds.includes(cycle.outcomeEvidenceId)
-        && key(outcomeText).includes(key(cycle.item)) && !!outcomeVisible;
+        && hasConfirmedOutcome(outcomeFrame.context, cycle.item);
       if (cycle.outcome === "confirmed" && !confirmed) unverifiedOutcomes++;
       const normalized = { ...cycle, evidenceIds, outcome: confirmed ? "confirmed" as const : "attempted" as const,
         outcomeEvidenceId: confirmed ? cycle.outcomeEvidenceId : null };
@@ -148,6 +160,45 @@ export class TaskMemory {
     if (this.log.length > 60) this.log.shift();
     return record;
   }
+
+  recordExecution(taskId: string, itemName: string, state: "unstarted" | "in_progress" | "blocked" | "confirmed", reason: string, context?: PageContext, pageId = "workflow") {
+    const task = this.tasks.find((task) => task.id === taskId);
+    if (!task) throw new Error("The approved task is no longer available.");
+    const queue = structuredClone(task.workQueue);
+    const item = queue.items.find((item) => key(item.item) === key(itemName));
+    if (!item) throw new Error("This item is outside the approved queue.");
+    if (item.state === "confirmed") return task;
+    if (state === "confirmed" && (!context || !hasConfirmedOutcome(context, itemName))) throw new Error("No named, visible completion signal was found. Review the outcome before retrying.");
+    let observationId: number | undefined;
+    if (context) {
+      this.observe(context, pageId, [], Date.now(), "workflow");
+      observationId = this.observations.at(-1)!.id;
+      item.evidenceIds = [...new Set([...item.evidenceIds, observationId])].slice(-12);
+    }
+    item.state = state; item.reason = reason; item.stateEvidenceId = observationId ?? item.stateEvidenceId;
+    if (state === "confirmed") {
+      const cycle = { item: itemName, evidenceIds: [observationId!], outcome: "confirmed" as const, outcomeEvidenceId: observationId!, actor: "workflow" as const };
+      task.cycles = [...task.cycles.filter((cycle) => key(cycle.item) !== key(itemName)), cycle].slice(-40);
+    }
+    // Reuse the same queue accounting as prediction. Runtime states are kept
+    // separately from human events, and only validated outcomes close items.
+    const candidate: TaskHypothesis = { taskId: task.id, title: task.title, confidence: task.confidence, steps: task.steps, reason: task.reason,
+      cycles: task.cycles, totalItems: null, totalEvidenceId: null, remainingItems: [], remainingEvidenceId: null,
+      currentItem: null, nextStep: "", continuation: "uncertain", suggestedWorkflow: null, workQueue: null };
+    task.workQueue = buildWorkQueue(candidate, task.cycles, new Map(this.observations.map((frame) => [frame.id, frame])), queue);
+    task.completedItems = task.workQueue.items.filter((item) => item.state === "confirmed").map((item) => item.item);
+    task.remainingItems = task.workQueue.items.filter((item) => item.state !== "confirmed").map((item) => item.item);
+    task.totalItems = task.workQueue.counts.total; task.remainingCount = task.workQueue.counts.remaining;
+    task.currentItem = task.workQueue.items.find((item) => item.state === "in_progress")?.item || null;
+    task.status = task.workQueue.decision === "complete" ? "complete" : task.workQueue.decision === "continue" ? "repeating" : "uncertain";
+    task.nextStep = task.workQueue.reason;
+    task.updatedAt = Date.now();
+    if (context && observationId) task.evidence = [...task.evidence.filter((entry) => entry.id !== observationId),
+      { id: observationId, time: task.updatedAt, title: context.title, url: context.url, signals: ["Approved workflow observation", ...context.headings, ...context.actions, context.excerpt].join(" · ").slice(0, 1400) }].slice(-40);
+    this.log.push(structuredClone(task));
+    if (this.log.length > 60) this.log.shift();
+    return task;
+  }
 }
 
 export class TaskJournal {
@@ -164,12 +215,13 @@ export class TaskJournal {
 
 export function taskReport(log: TaskRecord[]) {
   const safe = (text: string) => text.replace(/[\r\n]/g, " ");
-  return ["# Repeatable task detection journal", "", "AI assessments of observed activity. Prediction only; no actions were executed. Confidence is an estimate. Unknown progress remains unknown.", "",
+  return ["# Repeatable task detection journal", "", "AI assessments of observed activity. Predictions do not execute actions. Separately approved workflow runs can act; their outcomes are labeled below. Confidence is an estimate. Unknown progress remains unknown.", "",
     ...log.flatMap((task) => [
       `## ${safe(task.title)}`, `Recorded: ${new Date(task.updatedAt).toISOString()}`, `Status: ${task.status} · Confidence: ${Math.round(task.confidence * 100)}%`, "",
       safe(task.reason), "", "Steps:", ...task.steps.map((step, index) => `${index + 1}. ${safe(step)}`), "",
       `Observed item cycles: ${task.cycles.length}; confirmed outcomes: ${task.completedItems.length}; total: ${task.totalItems ?? "unknown"}; remaining: ${task.remainingCount ?? "unknown"}.`,
       `Confirmed items: ${task.completedItems.map(safe).join(", ") || "none"}`, `Known remaining items: ${task.remainingItems.map(safe).join(", ") || "unknown or none observed"}`,
+      `Outcomes confirmed by approved workflow runs: ${task.cycles.filter((cycle) => cycle.actor === "workflow").map((cycle) => safe(cycle.item)).join(", ") || "none"}`,
       `Likely next step: ${safe(task.nextStep)}`, "", "Supporting observations:",
       ...task.evidence.map((entry) => `- #${entry.id} · ${new Date(entry.time).toISOString()} · ${safe(entry.title)} · ${safe(entry.url)}\n  ${safe(entry.signals)}`), "",
       workQueueReport(task.workQueue), "", workflowDraftReport(task.workflowDraft, "###"), "",

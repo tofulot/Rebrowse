@@ -12,7 +12,11 @@
     "smoke:predictions:subq": "tsx scripts/predictions-smoke.ts --live",
     "smoke:desktop": "tsx scripts/desktop-smoke.ts",
     "smoke:workflow": "tsx scripts/workflow-smoke.ts",
-    "smoke:workflow:subq": "tsx scripts/workflow-smoke.ts --live"
+    "smoke:workflow:subq": "tsx scripts/workflow-smoke.ts --live",
+    "smoke:runner": "tsx scripts/runner-smoke.ts",
+    "smoke:runner:subq": "tsx scripts/runner-smoke.ts --live",
+    "smoke:clipboard": "tsx scripts/clipboard-smoke.ts",
+    "smoke:clipboard:subq": "tsx scripts/clipboard-smoke.ts --live"
   },
   "repository": {
     "type": "git",
