@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <img src="./docs/images/dashboard.png" width="100%" alt="Rebrowse detecting a repeatable research task and showing the completed workflow queue" />
+  <img src="./docs/images/dashboard.png" width="100%" alt="The live Rebrowse demo showing Example Domain beside its live predictions" />
 </p>
 
 Browse in a dedicated Chrome session. Rebrowse turns page activity into next-action predictions and can continue a repeatable task once it has enough evidence.
