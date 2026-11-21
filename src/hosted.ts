@@ -12,6 +12,7 @@ import { browserWorkflowDriver } from "./workflow-browser.js";
 const cookieName = "rebrowse_session";
 const dashboardPath = "/dashboard/";
 const lifetimeSeconds = 300;
+const reconnectGraceMs = 5000;
 const files = {
   "/": ["index.html", "text/html; charset=utf-8"],
   "/app.js": ["app.js", "text/javascript; charset=utf-8"],
@@ -54,6 +55,8 @@ type Session = {
   refreshedAt: number;
   expiresAt: number;
   timer: ReturnType<typeof setTimeout>;
+  dashboardConnections: number;
+  disconnectTimer?: ReturnType<typeof setTimeout>;
   close(): Promise<void>;
 };
 
@@ -66,7 +69,8 @@ async function openSession(service: BrowserService, origin: string) {
   const close = () => closePromise ??= (async () => {
     dashboard.close();
     controller.stop();
-    await Promise.allSettled([observer?.stop(), controller.finishExecution(), browser.close()]);
+    void Promise.allSettled([observer?.stop(), controller.finishExecution()]);
+    await browser.close().catch(() => {});
   })();
   try {
     const agent = await connectAgent(browser);
@@ -150,8 +154,21 @@ export function hostedServer(service: BrowserService, origin: string, limits: { 
   async function end(token: string, session: Session) {
     if (!sessions.delete(token)) return;
     clearTimeout(session.timer);
+    clearTimeout(session.disconnectTimer);
     try { await session.close(); }
     finally { inUse--; }
+  }
+
+  function watchDashboard(token: string, session: Session, response: ServerResponse) {
+    clearTimeout(session.disconnectTimer);
+    session.dashboardConnections++;
+    response.once("close", () => {
+      session.dashboardConnections--;
+      if (session.dashboardConnections === 0 && sessions.has(token)) {
+        // A reload briefly closes the old stream before opening a new one.
+        session.disconnectTimer = setTimeout(() => { void end(token, session); }, reconnectGraceMs);
+      }
+    });
   }
 
   async function tabs(session: Session) {
@@ -183,7 +200,7 @@ export function hostedServer(service: BrowserService, origin: string, limits: { 
       throw new RequestError(502, "The cloud browser couldn’t start. Try again shortly.");
     });
     const timer = setTimeout(() => { void end(token, session); }, Math.max(0, expiresAt - Date.now()));
-    const session: Session = { ...browser, views: new Map(), refresh: undefined, refreshedAt: 0, expiresAt, timer };
+    const session: Session = { ...browser, views: new Map(), refresh: undefined, refreshedAt: 0, expiresAt, timer, dashboardConnections: 0 };
     sessions.set(token, session);
     try {
       const pages = await tabs(session);
@@ -263,7 +280,9 @@ export function hostedServer(service: BrowserService, origin: string, limits: { 
     }
     if (path.startsWith(dashboardPath)) {
       if (!session) { response.writeHead(404).end(); return; }
-      await session.dashboard.handle(request, response, path.slice(dashboardPath.length), origin);
+      const route = path.slice(dashboardPath.length);
+      if (route === "events" && request.method === "GET") watchDashboard(token, session, response);
+      await session.dashboard.handle(request, response, route, origin);
       return;
     }
     const asset = Object.hasOwn(files, path) ? files[path as keyof typeof files] : undefined;

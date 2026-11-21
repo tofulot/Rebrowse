@@ -30,7 +30,7 @@ Use `help` in the terminal to list commands, `dashboard` to reopen the dashboard
 
 ## Host Rebrowse for visitors
 
-Hosted mode opens an interactive Browserbase Chrome session next to the Rebrowse dashboard. Visitors can enter public website addresses, use tabs, and get live predictions and automatic workflows without installing anything or supplying an API key. Each browser session ends after five minutes. The hosted session uses page activity for predictions and omits desktop signals, clipboard observation, and recording.
+Hosted mode opens an interactive Browserbase Chrome session next to the Rebrowse dashboard. Visitors can enter public website addresses, use tabs, and get live predictions and automatic workflows without installing anything or supplying an API key. The browser closes a few seconds after the last Rebrowse tab disconnects, or after five minutes at most. The hosted session uses page activity for predictions and omits desktop signals, clipboard observation, and recording.
 
 Set `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, and a Savant-enabled `SUBQ_API_KEY` on the host. Run `npm ci` and `npm run start:hosted` to try it at `http://localhost:3000`. These packages run on the host and the keys stay there.
 
