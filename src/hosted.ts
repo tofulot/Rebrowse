@@ -8,6 +8,7 @@ import { connectAgent } from "./browser.js";
 import { dashboardRoutes, PredictionDashboard } from "./dashboard.js";
 import { BrowserObserver } from "./observer.js";
 import { browserWorkflowDriver } from "./workflow-browser.js";
+import { uiAsset } from "./ui-assets.js";
 
 const cookieName = "rebrowse_session";
 const dashboardPath = "/dashboard/";
@@ -285,8 +286,11 @@ export function hostedServer(service: BrowserService, origin: string, limits: { 
       await session.dashboard.handle(request, response, route, origin);
       return;
     }
+    if (request.method !== "GET") { response.writeHead(404).end(); return; }
+    const shared = await uiAsset(path.slice(1));
+    if (shared) { response.writeHead(200, { "Content-Type": shared.contentType }).end(shared.body); return; }
     const asset = Object.hasOwn(files, path) ? files[path as keyof typeof files] : undefined;
-    if (!asset || request.method !== "GET") { response.writeHead(404).end(); return; }
+    if (!asset) { response.writeHead(404).end(); return; }
     const body = await readFile(new URL(`./hosted/${asset[0]}`, import.meta.url));
     response.writeHead(200, { "Content-Type": asset[1] }).end(body);
   }

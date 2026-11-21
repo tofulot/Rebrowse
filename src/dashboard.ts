@@ -13,6 +13,7 @@ import { clipboardEnabled, clipboardStatus, freshClipboard, sanitizeClipboard, C
 import { SessionRecorder, parseRecording, type RecordingState } from "./recording.js";
 import { replayRecording, replayReportMarkdown, type ReplayReport } from "./replay.js";
 import { resolve } from "node:path";
+import { uiAsset } from "./ui-assets.js";
 
 type DashboardState = {
   paused: boolean;
@@ -540,9 +541,11 @@ export function dashboardRoutes(controller: PredictionDashboard, hosted = false)
       response.on("close", () => { clearInterval(heartbeat); clients.delete(response); });
       return;
     }
-    const file = files.get(route);
-    if (!file) { response.writeHead(404).end(); return; }
     try {
+      const asset = await uiAsset(route);
+      if (asset) { response.writeHead(200, { "Content-Type": asset.contentType }).end(asset.body); return; }
+      const file = files.get(route);
+      if (!file) { response.writeHead(404).end(); return; }
       const data = await readFile(new URL(`./dashboard/${file[0]}`, import.meta.url));
       const body = hosted && route === "" ? data.toString("utf8").replace("<body>", '<body class="hosted">') : data;
       response.writeHead(200, { "Content-Type": file[1]! }).end(body);

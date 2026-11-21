@@ -5,41 +5,45 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Try live browsing predictions and workflows in Rebrowse.">
   <title>Try Rebrowse</title>
+  <link rel="stylesheet" href="./ui/theme.css">
   <link rel="stylesheet" href="./style.css">
-  <script src="./app.js" defer></script>
+  <script type="module" src="./app.js"></script>
 </head>
 <body>
   <header class="topbar">
-    <strong class="brand">Rebrowse</strong>
-    <div class="session-controls" hidden id="session-controls">
-      <span id="expiration"></span><button id="end" type="button">End session</button>
+    <strong class="brand"><svg class="icon" aria-hidden="true"><use href="./ui/icons.svg#rebrowse"></use></svg>Rebrowse</strong>
+    <div class="header-controls session-controls" hidden id="session-controls">
+      <span class="watch-status" id="watch-status" data-tone="quiet" role="status"><span class="dot"></span><span id="watch-label">Connecting…</span></span>
+      <button class="button" id="watch-toggle" type="button" disabled><svg class="icon" aria-hidden="true"><use href="./ui/icons.svg#pause"></use></svg><span id="watch-action">Pause watching</span></button>
+      <span id="expiration" aria-label="Session time remaining"></span>
+      <button class="button quiet-button" id="end" type="button">End session</button>
     </div>
   </header>
   <main>
     <section class="welcome" id="welcome">
       <h1>Browse with Rebrowse</h1>
-      <p>Open any public website in a temporary Chrome session. As you browse, Rebrowse predicts your next move and can run workflows when it detects repetition.</p>
-      <button type="button" id="start" disabled>Start browsing</button>
+      <p>Open a public website in a temporary browser. Rebrowse predicts your next move as you browse and can continue repeatable tasks.</p>
+      <button class="button primary" type="button" id="start" disabled><svg class="icon" aria-hidden="true"><use href="./ui/icons.svg#play"></use></svg>Start browsing</button>
       <p class="privacy">Sessions last up to five minutes. Rebrowse sends relevant page content and activity to SubQ. Use public pages and skip personal logins.</p>
     </section>
-    <p role="status" id="status" hidden></p>
+    <p class="message" role="status" id="status" hidden></p>
     <section class="workspace" id="workspace" aria-label="Live Rebrowse session" hidden>
-      <section class="browser" aria-label="Cloud Chrome">
+      <div class="browser-chrome" aria-label="Browser controls">
         <div class="tabs">
           <div id="tabs" aria-label="Browser tabs"></div>
-          <button type="button" id="new" aria-label="New tab" title="New tab">+</button>
+          <button class="button icon-button" type="button" id="new" aria-label="New tab" title="New tab"><svg class="icon" aria-hidden="true"><use href="./ui/icons.svg#plus"></use></svg></button>
         </div>
         <form id="navigation" class="navigation">
-          <button type="button" id="back" aria-label="Back" title="Back">‹</button>
-          <button type="button" id="forward" aria-label="Forward" title="Forward">›</button>
-          <button type="button" id="reload" aria-label="Reload" title="Reload">↻</button>
+          <button class="button icon-button" type="button" id="back" aria-label="Back" title="Back"><svg class="icon" aria-hidden="true"><use href="./ui/icons.svg#arrow-left"></use></svg></button>
+          <button class="button icon-button" type="button" id="forward" aria-label="Forward" title="Forward"><svg class="icon" aria-hidden="true"><use href="./ui/icons.svg#arrow-right"></use></svg></button>
+          <button class="button icon-button" type="button" id="reload" aria-label="Reload" title="Reload"><svg class="icon" aria-hidden="true"><use href="./ui/icons.svg#arrow-path"></use></svg></button>
           <input id="address" aria-label="Search or enter a website address" placeholder="Search or enter a website address" type="text" enterkeyhint="go" autocomplete="off" maxlength="3000" spellcheck="false" required>
-          <button type="submit" id="go">Go</button>
+          <button class="button" type="submit" id="go">Go</button>
         </form>
-        <div class="viewport">
-          <p id="browser-message">Search or enter a website address.</p>
-          <iframe id="browser" title="Interactive Chrome session" sandbox="allow-same-origin allow-scripts" referrerpolicy="no-referrer" hidden></iframe>
-        </div>
+      </div>
+      <section class="viewport" aria-label="Cloud Chrome">
+        <div class="browser-empty" id="browser-message"><span class="empty-icon"><svg class="icon" aria-hidden="true"><use href="./ui/icons.svg#globe-alt"></use></svg></span><p id="browser-message-text">Search or enter a website address.</p></div>
+        <iframe id="browser" title="Interactive Chrome session" sandbox="allow-same-origin allow-scripts" referrerpolicy="no-referrer" hidden></iframe>
       </section>
       <iframe id="dashboard" title="Rebrowse live predictions and workflows"></iframe>
     </section>

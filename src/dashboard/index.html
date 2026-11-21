@@ -1,53 +1,234 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Rebrowse — Live predictions</title><link rel="stylesheet" href="./style.css"><script defer src="./app.js"></script>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rebrowse — Live predictions</title>
+  <link rel="stylesheet" href="./ui/theme.css">
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./app.js"></script>
 </head>
 <body>
-  <div class="shell">
-    <aside class="rail"><a class="brand" href="./" aria-label="Rebrowse dashboard">r<span>↗</span></a><span class="rail-label">REBROWSE</span><span class="rail-bottom">01</span></aside>
-    <main>
-      <header><div class="breadcrumb">REBROWSE <span>/</span> LIVE OBSERVATORY</div><div class="connection"><span id="connection-dot" class="dot"></span><span id="connection">Connected locally</span></div></header>
-      <section class="intro"><div><div class="eyebrow">ONE STEP AHEAD</div><h1>A glimpse of what’s next.</h1><p>Your browsing signals, translated into possible next moves.</p></div><div class="controls"><button id="predict" class="button secondary">Predict now <span>↗</span></button><button id="pause" class="button primary">Pause watching <span>Ⅱ</span></button></div></section>
-      <section class="context-strip" aria-label="Current browsing context"><div class="live-label"><span class="dot" id="status-dot"></span><span id="status">Watching</span></div><div class="page-context"><span class="context-caption">OBSERVING</span><strong id="page-title">Waiting for your first page</strong><span id="page-url">Browse in the other tab to begin.</span></div><div class="mode"><span class="context-caption">MODE</span><strong id="browser-mode">Observe & predict</strong><span>Workflows start from predictions</span></div></section>
-      <div id="error" role="alert" hidden></div>
-      <section class="desktop-panel" aria-label="Browser-level context">
-        <div class="desktop-copy"><div class="eyebrow">BEYOND THE PAGE</div><strong id="desktop-focus">Connecting browser context…</strong><p id="desktop-message">Page activity is available. Checking browser-level signals.</p><button id="desktop-enable" class="button secondary" hidden>Enable address-bar signals ↗</button><div id="address-input-panel" hidden><div class="address-input-heading"><span>ADDRESS BAR CONTENTS</span><span id="address-input-state">Live</span></div><code id="address-input"></code><span class="address-input-note">Used by SubQ to predict your next search or navigation.</span></div></div>
-        <div class="pointer-view"><div class="pointer-map" id="pointer-map" aria-label="Live pointer position"><span class="pointer-toolbar"></span><span id="pointer-dot" hidden></span><span class="pointer-caption">LIVE POINTER</span></div><div class="pointer-meta"><strong id="pointer-position">—</strong><span id="pointer-region">Waiting for browser focus</span></div></div>
-      </section>
-      <section class="clipboard-panel" aria-label="Clipboard prediction context">
-        <div class="clipboard-heading"><div><div class="eyebrow">COPY · CUT · PASTE</div><h2>Clipboard context</h2></div><span id="clipboard-status" class="tag">WAITING</span></div>
-        <p id="clipboard-message">Copy or paste in your browsing tab to add context.</p><pre id="clipboard-preview" hidden><code id="clipboard-text"></code></pre>
-        <div class="clipboard-meta"><span id="clipboard-origin"></span><span id="clipboard-used"></span></div>
-        <p class="clipboard-note">Relevant text is sent to SubQ for predictions. Context clears after two minutes or when paused. Password and payment fields are excluded.</p>
-      </section><section class="workflow-panel" aria-label="Repeatable task detections">
-        <div class="workflow-header"><div><div class="eyebrow">PATTERN MEMORY</div><h2>Repeatable tasks</h2></div><a class="button secondary" href="./tasks.md" download>Download journal ↗</a></div>
-        <p id="automation-status" class="automation-status" role="status" aria-live="polite">Watching for a repeatable task with useful next targets.</p>
-        <div id="workflow-empty"><h3>Looking for a pattern.</h3><p>One or two meaningful actions can reveal a broader goal, such as gathering review guides for related units.</p></div>
-        <div id="workflow-current" hidden><div class="workflow-title"><h3 id="workflow-title"></h3><span id="workflow-confidence" class="tag"></span></div><div class="workflow-status" id="workflow-status"></div><p id="workflow-reason"></p><ol id="workflow-steps"></ol><div id="workflow-progress"></div><div class="workflow-next"><span class="context-caption">LIKELY CONTINUATION</span><strong id="workflow-next"></strong><span id="workflow-remaining"></span></div><section class="queue-panel" aria-label="Work queue and stopping assessment">
-          <div class="queue-heading"><div><div class="eyebrow">CURRENT RUN</div><h3>Work queue</h3></div><span id="queue-decision" class="tag"></span></div>
-          <p id="queue-reason" role="status" aria-live="polite"></p><div id="queue-counts"></div>
-          <div class="queue-scope"><strong id="queue-scope"></strong><span id="queue-scope-reason"></span></div>
-          <p id="queue-next"></p><ol id="queue-items" aria-label="Tracked items"></ol>
-          <details id="queue-rules"><summary>Stopping rules</summary><p id="queue-completion-rule"></p><p>Ready items can support another predicted cycle. In-progress items need an outcome check. Unavailable items can be skipped without holding up other targets. Duplicate identities are counted once.</p></details>
-          <span class="queue-note">Inferred goals can create and run workflows automatically.</span>
-        </section><section id="workflow-draft" class="draft-panel" aria-label="Created workflow" hidden><div class="draft-heading"><div><div class="eyebrow">CREATED WORKFLOW</div><h3 id="draft-title"></h3></div><span class="tag">AUTOMATIC</span></div><p id="draft-summary"></p><div id="draft-inputs"></div><div id="draft-loop" class="draft-loop"></div><details id="draft-details"><summary>Workflow steps and stopping rules</summary><ol id="draft-steps"></ol><div class="draft-rules"><h4>Skip and stop rules</h4><p id="draft-skip"></p><p id="draft-stop"></p></div><div class="draft-rules"><h4>Notes</h4><ul id="draft-notes"></ul></div></details><p class="workflow-auto-note">Runs automatically from the inferred goal. Each batch is bounded; use Stop workflow to interrupt it.</p><div class="draft-footer"><span id="draft-version"></span><a id="draft-download" class="button secondary" download>Download workflow ↗</a></div></section><details class="workflow-evidence"><summary>Supporting observations</summary><ul id="workflow-evidence"></ul></details><p class="workflow-note">AI assessment of visible evidence. A click alone is an attempt, not a confirmed outcome. Workflows are inferred from activity and run automatically in bounded batches.</p></div>
-        <section id="workflow-run" class="run-panel" aria-label="Automatic workflow run" hidden><div class="queue-heading"><div><div class="eyebrow">AUTOMATIC EXECUTION</div><h3 id="run-title">Workflow run</h3></div><span id="run-status" class="tag"></span></div><p id="run-message" role="status" aria-live="polite"></p><p id="run-progress"></p><button id="workflow-run-pause" class="button secondary" hidden>Stop workflow ■</button><p id="run-stop-note" hidden>Execution has stopped. New user activity can lead to a new bounded workflow; the app does not extend a batch from its own actions.</p><details><summary>Run activity</summary><ol id="run-log"></ol></details></section><details class="workflow-journal"><summary><span>Detection journal</span><span id="workflow-count">0 records</span></summary><ol id="workflow-log"></ol></details><div class="workflow-footer"><span id="workflow-observations">0 page observations</span><span id="workflow-save">Session only</span></div>
-      </section>
-      <section class="recording-panel" aria-label="Demonstration recording and replay">
-        <div class="workflow-header"><div><div class="eyebrow">DISCOVERED FROM YOUR ACTIVITY</div><h2>Record &amp; replay</h2></div><span id="recording-status" class="tag">NOT RECORDING</span></div>
-        <p>Browse normally. The AI infers your goal, recognizes repetition and counts observed steps automatically. Predictions are already running; recording just saves the activity for replay.</p>
-        <div class="recording-controls"><button id="recording-start" class="button primary">Record browsing ●</button><button id="recording-stop" class="button secondary" hidden>Stop &amp; save ■</button><a id="recording-download" class="button secondary" href="./recording.jsonl" download hidden>Download recording ↗</a><button id="recording-replay" class="button secondary" hidden>Replay saved activity ↗</button></div>
-        <p id="recording-progress" role="status" aria-live="polite">Page states and browser signals are saved locally when recording is on.</p><p id="recording-detection"></p>
-        <p class="recording-note">Live workflows run automatically when the AI has a useful plan, including while recording. Stop workflow or Pause watching interrupts execution. Recordings label the AI's actions separately. Saved-activity replay only analyzes the recording. Screenshots, video, raw clipboard text and ordinary form values are excluded; public search URLs remain.</p>
-        <div id="replay-result" hidden><div class="workflow-header"><h3>Detection speed</h3><a id="replay-download" class="button secondary" href="./replay.md" download hidden>Download report ↗</a></div><p id="replay-summary" role="status" aria-live="polite"></p><p id="replay-baseline"></p><div class="replay-table-wrap"><table><thead><tr><th>Step</th><th>Resources</th><th>Pattern</th><th>Confidence</th><th>Response time</th></tr></thead><tbody id="replay-rows"></tbody></table></div></div>
-      </section>
-      <div class="columns"><section class="predictions"><div class="section-heading"><h2>Likely next moves</h2><span id="freshness" class="tag">WAITING FOR SIGNALS</span></div><p class="section-note">What SubQ suspects you’ll do next.</p><div id="prediction-list"><div class="empty"><span class="empty-symbol">↗</span><h3>Every next move starts somewhere.</h3><p>Click, scroll, or hover in your browsing tab.<br>Your first predictions will appear here.</p></div></div><div class="confidence-note"><span>◌</span> Confidence is a model estimate, not measured accuracy. Other actions are always possible.</div></section>
-      <section class="activity-panel"><div class="section-heading"><h2>Live activity</h2><span id="event-count" class="count">0</span></div><p class="section-note">The signals informing each prediction.</p><ol id="activity-list"><li class="activity-empty">No activity yet. Start exploring.</li></ol><div class="privacy-note"><span>◈</span> Ordinary form values and passwords are excluded. Explicit safe clipboard transfers can be included.</div></section></div>
-      <section class="insight"><div class="insight-label"><span class="spark">✳</span><div class="eyebrow">MODEL PERSPECTIVE</div><span id="thinking-state">Listening for activity</span></div><div class="insight-body"><h3 id="intent">A little context goes a long way.</h3><p id="summary">As you browse, SubQ will share a brief explanation of the signals behind its predictions.</p><div class="insight-footer"><span>Evidence summary · not internal reasoning</span><span id="latency">—</span></div></div></section>
-      <footer><span><span class="footer-dot"></span> SUBQ PREVIEW <span class="footer-divider">/</span> LOCAL OBSERVATION</span><span id="requests">0 predictions requested</span></footer>
-    </main>
-  </div>
+  <header class="topbar local-only">
+    <a class="brand" href="./"><svg class="icon" aria-hidden="true"><use href="./ui/icons.svg#rebrowse"></use></svg>Rebrowse</a>
+    <div class="header-controls">
+      <span id="watch-status" class="watch-status" data-tone="quiet" role="status"><span class="dot"></span><span id="status">Connecting…</span></span>
+      <button id="pause" class="button" type="button" disabled><svg class="icon" aria-hidden="true"><use href="./ui/icons.svg#pause"></use></svg><span id="pause-label">Pause watching</span></button>
+    </div>
+  </header>
+
+  <main class="dashboard">
+    <section class="context-strip local-only" aria-label="Current browsing context">
+      <span class="section-icon"><svg class="icon" aria-hidden="true"><use href="./ui/icons.svg#window"></use></svg></span>
+      <div class="page-context">
+        <span class="context-caption">Current page</span>
+        <strong id="page-title">Waiting for your first page</strong>
+        <span id="page-url">Browse in the other tab to begin.</span>
+      </div>
+      <div class="mode">
+        <span class="context-caption">Mode</span>
+        <strong id="browser-mode">Observe &amp; automate</strong>
+      </div>
+    </section>
+    <div id="error" class="message error" role="alert" hidden></div>
+
+    <div class="dashboard-grid">
+      <div class="main-column">
+        <section class="predictions" aria-labelledby="predictions-title">
+          <div class="section-heading">
+            <h1 id="predictions-title">Live predictions</h1>
+            <button id="predict" class="button primary" type="button" disabled><svg class="icon" aria-hidden="true"><use href="./ui/icons.svg#play"></use></svg>Predict now</button>
+          </div>
+          <p id="freshness" class="freshness" role="status">Waiting for signals</p>
+          <div id="prediction-list">
+            <div class="empty">
+              <span class="section-icon"><svg class="icon" aria-hidden="true"><use href="./ui/icons.svg#bolt"></use></svg></span>
+              <div><h3>Waiting for your first prediction</h3><p>Open a page and start browsing to see likely next moves.</p></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="workflow-panel panel" aria-labelledby="workflow-title">
+          <div class="section-heading">
+            <h2 id="workflow-title">Repeatable tasks</h2>
+            <button id="workflow-run-pause" class="button small-button" type="button" hidden><svg class="icon" aria-hidden="true"><use href="./ui/icons.svg#stop"></use></svg>Stop workflow</button>
+          </div>
+
+          <section id="workflow-run" class="run-panel" aria-label="Automatic workflow run" hidden>
+            <p id="run-progress"></p>
+            <progress id="run-meter" value="0" max="1" aria-label="Workflow progress" hidden></progress>
+            <p id="run-stop-note" hidden>Execution has stopped. New browsing activity can lead to a new bounded workflow.</p>
+          </section>
+          <p id="automation-status" class="automation-status" role="status">Watching for a repeatable task with useful next targets.</p>
+
+          <div id="workflow-empty" class="empty compact">
+            <span class="section-icon"><svg class="icon" aria-hidden="true"><use href="./ui/icons.svg#rectangle-stack"></use></svg></span>
+            <div><h3>No task detected yet</h3><p>Related actions can reveal a repeatable task, like opening several guides from the same series.</p></div>
+          </div>
+
+          <div id="workflow-current" hidden>
+            <section class="queue-panel" aria-label="Work queue">
+              <div class="section-heading">
+                <h3>Work queue</h3>
+                <span id="queue-decision" class="tag"></span>
+              </div>
+              <ol id="queue-items" aria-label="Tracked items"></ol>
+              <details>
+                <summary><span>Queue details and stopping rules</span></summary>
+                <div class="detail-body">
+                  <p id="queue-reason"></p>
+                  <div id="queue-counts" class="stats"></div>
+                  <div class="queue-scope"><strong id="queue-scope"></strong><p id="queue-scope-reason"></p></div>
+                  <p id="queue-next"></p>
+                  <p id="queue-completion-rule"></p>
+                  <p class="note">Ready items can support another cycle. In-progress items need an outcome check. Unavailable items can be skipped. Duplicates count once.</p>
+                  <ul id="queue-item-notes" class="detail-list"></ul>
+                </div>
+              </details>
+            </section>
+
+            <details class="workflow-evidence">
+              <summary><span>Detection details</span></summary>
+              <div class="detail-body">
+                <div class="task-meta"><span id="workflow-status"></span><span id="workflow-confidence" class="tag"></span></div>
+                <p id="workflow-reason"></p>
+                <ol id="workflow-steps"></ol>
+                <div id="workflow-progress" class="stats"></div>
+                <div class="workflow-next">
+                  <span class="context-caption">Likely continuation</span>
+                  <strong id="workflow-next"></strong>
+                  <p id="workflow-remaining"></p>
+                </div>
+                <h3>Supporting observations</h3>
+                <ul id="workflow-evidence" class="detail-list"></ul>
+                <p class="note">Rebrowse estimates outcomes from visible evidence. A click alone counts as an attempt. Detected workflows run in bounded batches.</p>
+              </div>
+            </details>
+
+            <div id="workflow-draft" hidden>
+              <details id="draft-details">
+                <summary><span>Created workflow</span><span id="draft-version" class="auxiliary"></span></summary>
+                <div class="detail-body">
+                  <h3 id="draft-title"></h3>
+                  <p id="draft-summary"></p>
+                  <div id="draft-inputs"></div>
+                  <p id="draft-loop"></p>
+                  <ol id="draft-steps" class="detail-list"></ol>
+                  <h3>Skip and stop rules</h3>
+                  <p id="draft-skip"></p>
+                  <p id="draft-stop"></p>
+                  <ul id="draft-notes"></ul>
+                  <a id="draft-download" class="button" download><svg class="icon" aria-hidden="true"><use href="./ui/icons.svg#arrow-down-tray"></use></svg>Download workflow</a>
+                </div>
+              </details>
+            </div>
+          </div>
+
+          <details id="run-details" hidden>
+            <summary><span>Run activity</span><span id="run-status" class="tag"></span></summary>
+            <div class="detail-body">
+              <h3 id="run-title">Workflow run</h3>
+              <p id="run-message"></p>
+              <ol id="run-log" class="detail-list"></ol>
+            </div>
+          </details>
+          <details class="workflow-journal">
+            <summary><span>Detection journal</span><span id="workflow-count" class="auxiliary">0 records</span></summary>
+            <div class="detail-body">
+              <ol id="workflow-log" class="detail-list"></ol>
+              <p class="journal-footer"><span id="workflow-observations">0 page observations</span><span id="workflow-save">Session only</span></p>
+              <a class="button" href="./tasks.md" download><svg class="icon" aria-hidden="true"><use href="./ui/icons.svg#arrow-down-tray"></use></svg>Download journal</a>
+            </div>
+          </details>
+        </section>
+
+        <section class="recording-panel panel local-only" id="recording" aria-labelledby="recording-heading">
+          <div class="section-heading">
+            <h2 id="recording-heading">Record &amp; replay</h2>
+            <span id="recording-status" class="tag">Not recording</span>
+          </div>
+          <p>Save this browsing session locally and replay it to see when Rebrowse detected a pattern.</p>
+          <div class="recording-controls">
+            <button id="recording-start" class="button primary" type="button">Record browsing</button>
+            <button id="recording-stop" class="button" type="button" hidden><svg class="icon" aria-hidden="true"><use href="./ui/icons.svg#stop"></use></svg>Stop &amp; save</button>
+            <a id="recording-download" class="button" href="./recording.jsonl" download hidden><svg class="icon" aria-hidden="true"><use href="./ui/icons.svg#arrow-down-tray"></use></svg>Download recording</a>
+            <button id="recording-replay" class="button" type="button" hidden><svg class="icon" aria-hidden="true"><use href="./ui/icons.svg#play"></use></svg>Replay saved activity</button>
+          </div>
+          <p id="recording-progress" role="status" class="note">Page states and browser signals are saved locally when recording is on.</p>
+          <p id="recording-detection"></p>
+          <details>
+            <summary><span>What gets recorded</span></summary>
+            <div class="detail-body">
+              <p>Recordings distinguish workflow actions from your actions. They exclude screenshots, video, raw clipboard text, and ordinary form values. Public search URLs remain.</p>
+              <p>Live workflows can run while you record. Use Stop workflow or Pause watching to interrupt them. Replay analyzes the saved activity without executing browser actions.</p>
+            </div>
+          </details>
+          <div id="replay-result" hidden>
+            <div class="section-heading">
+              <h3>Detection speed</h3>
+              <a id="replay-download" class="button" href="./replay.md" download hidden><svg class="icon" aria-hidden="true"><use href="./ui/icons.svg#arrow-down-tray"></use></svg>Download report</a>
+            </div>
+            <p id="replay-summary" role="status"></p>
+            <p id="replay-baseline" class="note"></p>
+            <div class="replay-table-wrap" tabindex="0" role="region" aria-label="Replay results">
+              <table>
+                <thead><tr><th scope="col">Step</th><th scope="col">Resources</th><th scope="col">Pattern</th><th scope="col">Confidence</th><th scope="col">Response time</th></tr></thead>
+                <tbody id="replay-rows"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <aside class="side-column" aria-label="Browsing signals">
+        <details class="activity-panel" open>
+          <summary><span>Live activity</span><span id="event-count" class="tag">0</span></summary>
+          <ol id="activity-list" class="activity-list"><li class="note">No activity yet. Start browsing to see new signals.</li></ol>
+          <p class="note">Ordinary form values and passwords are excluded. Safe clipboard transfers can be included.</p>
+        </details>
+
+        <details class="insight" id="prediction-insight" hidden>
+          <summary><span>Prediction context</span><span id="thinking-state" class="auxiliary"></span></summary>
+          <div class="detail-body">
+            <h3 id="intent"></h3>
+            <p id="summary"></p>
+            <p class="note"><span id="latency"></span></p>
+            <p class="note">Confidence reflects a model estimate. Other actions are possible.</p>
+          </div>
+        </details>
+
+        <section class="desktop-panel panel local-only" aria-labelledby="desktop-heading">
+          <h2 id="desktop-heading">Browser context</h2>
+          <div class="desktop-copy">
+            <h3 id="desktop-focus">Connecting browser context…</h3>
+            <p id="desktop-message">Page activity is available. Checking browser-level signals.</p>
+            <button id="desktop-enable" class="button" type="button" hidden>Enable address-bar signals</button>
+            <div id="address-input-panel" hidden>
+              <div class="section-heading"><span class="context-caption">Address bar contents</span><span id="address-input-state" class="tag">Live</span></div>
+              <code id="address-input"></code>
+              <p class="note">Used by SubQ to predict your next search or navigation.</p>
+            </div>
+          </div>
+          <div class="pointer-view">
+            <div class="pointer-map" id="pointer-map" aria-label="Live pointer position"><span class="pointer-toolbar"></span><span id="pointer-dot" hidden></span><span class="pointer-caption">Live pointer</span></div>
+            <div class="pointer-meta"><strong id="pointer-position">—</strong><span id="pointer-region">Waiting for browser focus</span></div>
+          </div>
+        </section>
+
+        <section class="clipboard-panel panel local-only" aria-labelledby="clipboard-heading">
+          <div class="section-heading"><h2 id="clipboard-heading">Clipboard context</h2><span id="clipboard-status" class="tag">Waiting</span></div>
+          <p id="clipboard-message">Copy or paste in your browsing tab to add context.</p>
+          <pre id="clipboard-preview" hidden><code id="clipboard-text"></code></pre>
+          <div class="clipboard-meta"><span id="clipboard-origin"></span><span id="clipboard-used"></span></div>
+          <p class="note">Relevant text is sent to SubQ for predictions. Context clears after two minutes or when paused. Password and payment fields are excluded.</p>
+        </section>
+      </aside>
+    </div>
+
+    <footer class="dashboard-footer">
+      <span id="connection">Connecting…</span>
+      <span id="requests">0 predictions requested</span>
+    </footer>
+  </main>
 </body>
 </html>

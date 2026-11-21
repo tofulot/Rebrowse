@@ -1,24 +1,49 @@
+import { icon, setIcon } from './ui/icons.js';
+
 const $ = (id) => document.getElementById(id);
 const hosted = document.body.classList.contains('hosted');
 const connectedLabel = hosted ? 'Live session' : 'Connected locally';
-if (hosted) $('connection').textContent = 'Connecting…';
+if (hosted) document.querySelector('.activity-panel').open = false;
 let state;
+let connected = false;
+let watchSignature;
 let lastPredictionTime;
 let lastWorkflowRender;
 const statusNames = { watching: 'Watching', collecting: 'Reading context', predicting: 'Predicting', ready: 'Watching', paused: 'Paused', error: 'Needs attention', 'needs-key': 'Key needed' };
 const stages = { watching: 'Listening for activity', collecting: 'Reading the current page', predicting: 'Estimating the next move', ready: 'Prediction updated', paused: 'Observation paused', error: 'Prediction unavailable', 'needs-key': 'Waiting for API key' };
-const icons = { click: '↗', hover: '⌁', edit: '⌨', focus: '⊡', scroll: '↕', navigate: '→', tab: '▣', copy: '▤', cut: '✂', paste: '↧', 'clipboard-available': '⎘', 'clipboard-change': '⎘', 'address-select': '⌘', 'address-focus': '⌕', 'address-edit': '⌨', 'pointer-dwell': '⌁', 'browser-focus': '▣' };
 const element = (tag, className, text) => { const node = document.createElement(tag); node.className = className; if (text !== undefined) node.textContent = text; return node; };
+
+function renderWatch() {
+  const status = state?.status;
+  const paused = !!state?.paused;
+  const enabled = connected && !!state;
+  const label = enabled ? statusNames[status] || 'Watching' : state ? 'Reconnecting…' : 'Connecting…';
+  const tone = !enabled || paused ? 'quiet'
+    : ['collecting', 'predicting'].includes(status) ? 'busy'
+    : ['error', 'needs-key'].includes(status) ? 'warning' : 'live';
+  const signature = JSON.stringify([label, tone, enabled, paused]);
+  if (signature === watchSignature) return;
+  watchSignature = signature;
+  if (hosted) {
+    window.parent.postMessage({ type: 'rebrowse-watch', label, tone, enabled, paused }, location.origin);
+  } else {
+    $('status').textContent = label;
+    $('watch-status').dataset.tone = tone;
+    $('pause').disabled = !enabled;
+    $('pause-label').textContent = paused ? 'Resume watching' : 'Pause watching';
+    setIcon($('pause').querySelector('use'), paused ? 'play' : 'pause');
+  }
+}
+
 function render(next) {
   state = next;
-  $('status').textContent = statusNames[state.status] || 'Watching';
+  renderWatch();
   document.body.classList.toggle('is-busy', ['collecting', 'predicting'].includes(state.status));
   document.body.classList.toggle('is-paused', state.paused);
   document.body.classList.toggle('is-stale', state.stale);
   $('page-title').textContent = state.page?.title || 'Waiting for your first page';
   $('page-url').textContent = state.page?.url || 'Browse in the other tab to begin.';
   $('page-url').title = state.page?.url || '';
-  $('pause').textContent = state.paused ? 'Resume watching  ▶' : 'Pause watching  Ⅱ';
   $('predict').disabled = state.paused || state.execution?.busy || !state.page || ['collecting', 'predicting', 'needs-key'].includes(state.status);
   $('browser-mode').textContent = state.execution?.busy ? 'Automatic workflow running' : state.recording && ['starting', 'recording', 'saving'].includes(state.recording.status) ? 'Observing & recording' : 'Observe & automate';
   $('thinking-state').textContent = stages[state.status];
@@ -42,11 +67,11 @@ function render(next) {
     : desktop?.status === 'starting' ? 'Connecting browser context…' : 'Page signals available';
   $('desktop-message').textContent = state.paused ? 'Pointer and browser-control observation are paused.' : desktop?.message || 'Browser-level observer is not attached to this session.';
   $('desktop-enable').hidden = !['permission-needed', 'focus-unavailable', 'error'].includes(desktop?.status);
-  $('desktop-enable').textContent = desktop?.status === 'permission-needed' ? 'Enable address-bar signals ↗' : 'Reconnect browser context ↗';
+  $('desktop-enable').textContent = desktop?.status === 'permission-needed' ? 'Enable address-bar signals' : 'Reconnect browser context';
   const address = state.paused ? null : desktop?.addressInput;
   $('address-input-panel').hidden = !address;
   $('address-input').textContent = address ? address.text || '(empty)' : '';
-  $('address-input-state').textContent = sample?.active && sample.focus === 'address-bar' ? 'LIVE' : 'LAST OBSERVED';
+  $('address-input-state').textContent = sample?.active && sample.focus === 'address-bar' ? 'Live' : 'Last observed';
   $('pointer-position').textContent = pointer && !state.paused ? `${Math.round(pointer.x)}, ${Math.round(pointer.y)}` : '—';
   $('pointer-region').textContent = pointer && !state.paused ? `${pointer.region.replaceAll('-', ' ')} · ${pointer.space === 'browser-window' ? 'window coordinates' : 'screen coordinates'}` : 'Waiting for browser focus';
   const mapped = pointer?.space === 'browser-window' && pointer.width > 0 && pointer.height > 0 && !state.paused;
@@ -55,21 +80,28 @@ function render(next) {
     $('pointer-dot').style.left = `${Math.max(0, Math.min(100, pointer.x / pointer.width * 100))}%`;
     $('pointer-dot').style.top = `${Math.max(0, Math.min(100, pointer.y / pointer.height * 100))}%`;
   }
-  $('freshness').textContent = state.paused ? 'PAUSED' : state.stale ? 'NEW SIGNALS · UPDATING' : state.prediction ? 'LATEST ESTIMATE' : 'WAITING FOR SIGNALS';
+  $('freshness').textContent = state.paused ? 'Watching paused' : state.stale ? 'New signals · updating' : state.prediction ? 'Latest estimates' : stages[state.status];
+  $('freshness').dataset.state = !state.paused && !state.stale && state.prediction ? 'ready' : '';
+  $('prediction-insight').hidden = !state.prediction;
   if (state.prediction && state.prediction.time !== lastPredictionTime) {
     lastPredictionTime = state.prediction.time;
-    $('prediction-list').replaceChildren(...state.prediction.predictions.map((prediction, index) => {
-      const card = element('article', 'prediction-card');
-      const top = element('div', 'card-top');
-      top.append(element('span', 'rank', index === 0 ? '01 / MOST LIKELY' : `0${index + 1} / ALTERNATIVE`));
-      const confidence = element('span', 'confidence', String(Math.round(prediction.confidence * 100)));
-      confidence.append(element('small', '', '%')); top.append(confidence);
-      const meter = element('div', 'meter');
-      const fill = element('div', 'meter-fill'); fill.style.width = `${prediction.confidence * 100}%`; meter.append(fill);
-      meter.setAttribute('role', 'meter'); meter.setAttribute('aria-label', 'Estimated confidence'); meter.setAttribute('aria-valuenow', String(Math.round(prediction.confidence * 100))); meter.setAttribute('aria-valuemin', '0'); meter.setAttribute('aria-valuemax', '100');
-      card.append(top, element('h3', '', prediction.action), element('p', '', prediction.evidence), meter);
+    const list = $('prediction-list');
+    const expanded = new Set(Array.from(list.querySelectorAll('details[open]'), (card) => card.dataset.action));
+    const focusedAction = document.activeElement?.closest('.prediction-card')?.dataset.action;
+    const cards = state.prediction.predictions.map((prediction) => {
+      const card = element('details', 'prediction-card');
+      card.dataset.action = prediction.action;
+      card.open = expanded.has(prediction.action);
+      const summary = element('summary', '');
+      const copy = element('span', '');
+      copy.append(element('strong', '', prediction.action),
+        element('span', 'confidence', `${Math.round(prediction.confidence * 100)}% estimated confidence`));
+      summary.append(copy, icon('chevron-right'));
+      card.append(summary, element('p', '', prediction.evidence));
       return card;
-    }));
+    });
+    list.replaceChildren(...cards);
+    cards.find((card) => card.dataset.action === focusedAction)?.querySelector('summary').focus({ preventScroll: true });
     $('intent').textContent = state.prediction.intent;
     $('summary').textContent = state.prediction.summary;
     $('latency').textContent = `${(state.prediction.durationMs / 1000).toFixed(1)}s · ${new Date(state.prediction.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
@@ -78,16 +110,19 @@ function render(next) {
     $('activity-list').replaceChildren(...state.activity.slice(-20).reverse().map((event) => {
       const row = element('li', 'activity-item');
       const body = element('div', '');
-      body.append(element('div', 'activity-kind', event.kind), element('div', 'activity-label', event.label));
-      row.append(element('span', 'activity-icon', icons[event.kind] || '·'), body, element('time', 'activity-time', new Date(event.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })));
+      body.append(element('div', 'activity-kind', event.kind.replaceAll('-', ' ')), element('div', 'activity-label', event.label));
+      const time = new Date(event.time);
+      const timestamp = element('time', 'activity-time', time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      timestamp.dateTime = time.toISOString();
+      row.append(body, timestamp);
       return row;
     }));
   }
 }
 function renderClipboard(clipboard) {
   const context = clipboard?.context;
-  const labels = { waiting: 'WAITING', ready: 'RECENT TEXT', redacted: 'TEXT EXCLUDED', empty: 'NO TEXT', unavailable: 'TEXT UNAVAILABLE', inactive: 'BROWSER IN BACKGROUND', paused: 'PAUSED', disabled: 'DISABLED' };
-  $('clipboard-status').textContent = labels[clipboard?.status] || 'WAITING';
+  const labels = { waiting: 'Waiting', ready: 'Recent text', redacted: 'Text excluded', empty: 'No text', unavailable: 'Text unavailable', inactive: 'Browser in background', paused: 'Paused', disabled: 'Disabled' };
+  $('clipboard-status').textContent = labels[clipboard?.status] || 'Waiting';
   const operations = { copy: 'Copied', cut: 'Cut', paste: 'Pasted', 'clipboard-available': 'Available clipboard text', 'clipboard-change': 'Clipboard changed' };
   $('clipboard-message').textContent = context ? `${operations[context.operation]}${context.redacted ? ' · content excluded' : context.format === 'non-text' ? ' · images/files are not read' : clipboard?.status === 'empty' ? ' · no plain text available' : context.truncated ? ' · showing the first 2048 characters' : ''}`
     : clipboard?.status === 'paused' ? 'Clipboard observation is paused and its text has been cleared.'
@@ -111,9 +146,9 @@ function renderWorkflow(state) {
   const task = tasks.find((item) => item.id === state.activeTaskId) || tasks[0];
   $('workflow-empty').hidden = !!task;
   $('workflow-current').hidden = !task;
+  $('workflow-title').textContent = task?.title || 'Repeatable tasks';
   if (task) {
-    $('workflow-title').textContent = task.title;
-    $('workflow-confidence').textContent = `${Math.round(task.confidence * 100)}% ESTIMATED CONFIDENCE`;
+    $('workflow-confidence').textContent = `${Math.round(task.confidence * 100)}% estimated confidence`;
     const labels = { suspected: 'Early pattern · inferred from limited activity', repeating: 'Likely to repeat', uncertain: 'Bounded continuation', complete: 'Observed list finished' };
     $('workflow-status').textContent = `${task.pattern && task.status === 'complete' ? 'Planned resource batch finished' : labels[task.status]}${state.activeTaskId === task.id ? '' : ' · detected earlier'} · ${new Date(task.updatedAt).toLocaleTimeString()}`;
     $('workflow-reason').textContent = task.pattern ? `${task.pattern.action} · ${Math.round(task.pattern.repeatLikelihood * 100)}% estimated repeat likelihood. ${task.pattern.reason}` : task.reason;
@@ -143,9 +178,19 @@ function renderWorkflow(state) {
     const itemStates = { unstarted: 'Ready', in_progress: 'In progress', confirmed: 'Confirmed', blocked: 'Unavailable' };
     $('queue-items').replaceChildren(...queue.items.map((item) => {
       const row = element('li', 'queue-item'); row.dataset.state = item.state;
-      const body = element('div', ''); body.append(element('strong', '', item.item), element('p', '', item.reason),
-        element('span', 'queue-citations', `Observations: ${item.evidenceIds.map((id) => `#${id}`).join(', ')}`));
-      row.append(body, element('span', 'queue-state', itemStates[item.state])); return row;
+      const status = element('span', 'queue-icon');
+      status.setAttribute('aria-hidden', 'true');
+      if (item.state === 'confirmed') status.append(icon('check'));
+      else if (item.state === 'in_progress') status.append(icon('play'));
+      else if (item.state === 'blocked') status.append(icon('x-mark'));
+      row.append(status, element('strong', '', item.item), element('span', 'queue-state', itemStates[item.state]));
+      return row;
+    }));
+    $('queue-item-notes').replaceChildren(...queue.items.map((item) => {
+      const row = element('li', '');
+      row.append(element('strong', '', item.item), element('p', '', item.reason),
+        element('span', '', `Observations: ${item.evidenceIds.map((id) => `#${id}`).join(', ')}`));
+      return row;
     }));
     $('queue-completion-rule').textContent = queue.completionRule;
     $('workflow-evidence').replaceChildren(...task.evidence.map((entry) => {
@@ -183,14 +228,20 @@ function renderWorkflow(state) {
 function renderExecution(state) {
   const run = state.execution?.run;
   $('automation-status').textContent = state.execution?.reason || 'Watching for a repeatable task with useful next targets.';
+  $('automation-status').hidden = !!state.execution?.busy;
   $('workflow-run').hidden = !run;
+  $('run-details').hidden = !run;
+  $('workflow-run-pause').hidden = !state.execution?.busy;
   if (!run) return;
   const labels = { running: 'RUNNING AUTOMATICALLY', pausing: 'STOPPING', paused: 'STOPPED', complete: 'BATCH FINISHED' };
-  $('run-title').textContent = `Workflow v${run.version}`;
   $('run-status').textContent = labels[run.status]; $('run-status').dataset.status = run.status;
   $('run-message').textContent = run.message;
-  $('run-progress').textContent = `${run.completedItems.length} of ${run.plannedItems.length} planned items finished · ${run.actionCount} browser actions${run.item ? ` · ${run.item}` : ''}`;
-  $('workflow-run-pause').hidden = !state.execution.busy;
+  $('run-progress').textContent = `${run.completedItems.length} of ${run.plannedItems.length} complete${run.item ? ` · ${run.item}` : ''}`;
+  $('run-title').textContent = `Workflow v${run.version} · ${run.actionCount} browser actions`;
+  const meter = $('run-meter');
+  meter.hidden = !run.plannedItems.length;
+  meter.max = run.plannedItems.length || 1;
+  meter.value = run.completedItems.length;
   $('workflow-run-pause').disabled = run.status === 'pausing';
   $('run-stop-note').hidden = run.status !== 'paused';
   $('run-log').replaceChildren(...run.log.slice(-20).reverse().map((entry) => {
@@ -199,8 +250,8 @@ function renderExecution(state) {
 }
 const stream = new EventSource('./events');
 stream.onmessage = (event) => { render(JSON.parse(event.data)); };
-stream.onopen = () => { $('connection').textContent = connectedLabel; $('connection').parentElement.classList.remove('offline'); };
-stream.onerror = () => { $('connection').textContent = 'Reconnecting…'; $('connection').parentElement.classList.add('offline'); };
+stream.onopen = () => { connected = true; $('connection').textContent = connectedLabel; $('connection').parentElement.classList.remove('offline'); renderWatch(); };
+stream.onerror = () => { connected = false; $('connection').textContent = 'Reconnecting…'; $('connection').parentElement.classList.add('offline'); renderWatch(); };
 async function command(name) {
   try {
     const response = await fetch(`./${name}`, { method: 'POST' });
@@ -215,8 +266,9 @@ $('workflow-run-pause').onclick = () => command('workflow-pause');
 function renderRecording(state) {
   const recording = state.recording;
   const active = recording && ['starting', 'recording', 'saving'].includes(recording.status);
-  const labels = { idle: 'NOT RECORDING', starting: 'STARTING', recording: 'RECORDING', saving: 'SAVING', saved: 'SAVED LOCALLY', error: 'SAVE FAILED' };
-  $('recording-status').textContent = labels[recording?.status] || 'NOT RECORDING';
+  const labels = { idle: 'Not recording', starting: 'Starting', recording: 'Recording', saving: 'Saving', saved: 'Saved locally', error: 'Save failed' };
+  $('recording-status').textContent = labels[recording?.status] || 'Not recording';
+  $('recording-status').dataset.status = recording?.status || 'idle';
   $('recording-start').hidden = !!active;
   $('recording-start').disabled = !!state.paused;
   $('recording-stop').hidden = !active;
