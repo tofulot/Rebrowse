@@ -6,6 +6,8 @@ The Blueprint allows two simultaneous browsers. A standalone server defaults to 
 
 ## Automatic updates on Render
 
+Install the Render GitHub App for the repository so Render receives push events. [Connect GitHub to Render](https://render.com/docs/git-provider#github-details)
+
 The Blueprint specifies `main` as the service branch and enables deploys on each commit. For an existing Blueprint, select `main` in its settings, sync the Blueprint, and confirm that the web service lists **On Commit** under **Auto-Deploy**. Keep the three provider settings in Render's environment variables.
 
 For each visitor, the app creates a temporary Browserbase session. The last Rebrowse tab closing starts a short reconnect window before the browser is released. Five minutes is the maximum session length.
