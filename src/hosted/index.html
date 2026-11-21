@@ -33,11 +33,11 @@
           <button type="button" id="back" aria-label="Back" title="Back">‹</button>
           <button type="button" id="forward" aria-label="Forward" title="Forward">›</button>
           <button type="button" id="reload" aria-label="Reload" title="Reload">↻</button>
-          <input id="address" aria-label="Website address" placeholder="Enter a website address" inputmode="url" autocomplete="off" maxlength="3000" spellcheck="false" required>
+          <input id="address" aria-label="Search or enter a website address" placeholder="Search or enter a website address" type="text" enterkeyhint="go" autocomplete="off" maxlength="3000" spellcheck="false" required>
           <button type="submit" id="go">Go</button>
         </form>
         <div class="viewport">
-          <p id="browser-message">Enter an address to open a website.</p>
+          <p id="browser-message">Search or enter a website address.</p>
           <iframe id="browser" title="Interactive Chrome session" sandbox="allow-same-origin allow-scripts" referrerpolicy="no-referrer" hidden></iframe>
         </div>
       </section>

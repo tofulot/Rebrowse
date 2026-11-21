@@ -3,6 +3,7 @@ const start = get('start');
 const status = get('status');
 const browser = get('browser');
 const address = get('address');
+const viewport = browser.parentElement;
 let selected;
 let expiresAt = 0;
 let busy = false;
@@ -47,14 +48,17 @@ function renderTabs(next, updateAddress = false) {
       return item;
     }));
   }
-  if (updateAddress || document.activeElement !== address) address.value = current?.url === 'about:blank' ? '' : current?.url || '';
+  if (updateAddress || document.activeElement !== address) {
+    const url = current?.url || '';
+    if (!url.startsWith('chrome-error:')) address.value = /^https?:/.test(url) ? url : '';
+  }
   const view = current?.view;
   browser.hidden = !view;
   if (view && browser.getAttribute('src') !== view) browser.src = view;
   if (!view) browser.removeAttribute('src');
   const notices = get('browser-message');
   notices.hidden = !!view;
-  notices.textContent = current?.url === 'about:blank' ? 'Enter an address to open a website.' : 'Connecting to this tab…';
+  notices.textContent = current?.url === 'about:blank' ? 'Search or enter a website address.' : 'Connecting to this tab…';
 }
 
 function show(result) {
@@ -86,7 +90,8 @@ async function changeTab(action, tabId = selected, url) {
   message();
   get('go').disabled = true;
   try {
-    const result = await request('/api/tab', 'POST', { action, tabId, url });
+    const size = { width: viewport.clientWidth, height: viewport.clientHeight };
+    const result = await request('/api/tab', 'POST', { action, tabId, url, viewport: size });
     if (!expiresAt) return;
     selected = result.selected ?? selected;
     renderTabs(result.tabs, true);

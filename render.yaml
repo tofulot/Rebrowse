@@ -9,6 +9,8 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "24.x"
+      - key: REBROWSE_CONCURRENT_SESSIONS
+        value: "2"
       - key: BROWSERBASE_API_KEY
         sync: false
       - key: BROWSERBASE_PROJECT_ID

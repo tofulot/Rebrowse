@@ -37,7 +37,9 @@ function browserService(apiKey: string, projectId: string): BrowserService {
       return new Map(pages.flatMap(({ id, debuggerFullscreenUrl }) => {
         const url = new URL(debuggerFullscreenUrl);
         const allowed = url.hostname === "browserbase.com" || url.hostname.endsWith(".browserbase.com");
-        return url.protocol === "https:" && allowed ? [[id, url.href] as const] : [];
+        if (url.protocol !== "https:" || !allowed) return [];
+        url.searchParams.set("navbar", "false");
+        return [[id, url.href] as const];
       }));
     },
   };
@@ -103,19 +105,36 @@ async function input(request: IncomingMessage) {
   try {
     const value = JSON.parse(Buffer.concat(chunks).toString());
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
-    return value as { tabId?: string; url?: string; action?: string };
+    return value as { tabId?: string; url?: string; action?: string; viewport?: { width?: unknown; height?: unknown } };
   }
   catch { throw new RequestError(400, "The browser request is invalid."); }
 }
 
 function destination(value: unknown) {
-  if (typeof value !== "string" || !value.trim()) throw new RequestError(400, "Enter a website address.");
+  if (typeof value !== "string" || !value.trim()) throw new RequestError(400, "Enter a search or website address.");
+  const text = value.trim();
+  const explicitUrl = /^[a-z][a-z0-9+.-]*:\/\//i.test(text);
+  const host = text.split(/[/:?#]/, 1)[0] ?? "";
+  const domain = host.includes(".") || text.startsWith("[");
+  if (!explicitUrl && (!domain || /\s/.test(text))) {
+    const search = new URL("https://duckduckgo.com/");
+    search.searchParams.set("q", text);
+    return search.href;
+  }
   try {
-    const text = value.trim();
-    const url = new URL(text.includes("://") ? text : `https://${text}`);
+    const url = new URL(explicitUrl ? text : `https://${text}`);
     if (["https:", "http:"].includes(url.protocol) && !url.username && !url.password) return url.href;
   } catch { /* Use the same message for malformed and unsupported addresses. */ }
   throw new RequestError(400, "Enter a valid HTTP or HTTPS address.");
+}
+
+function viewportSize(viewport: { width?: unknown; height?: unknown } | undefined) {
+  const { width, height } = viewport ?? {};
+  if (typeof width !== "number" || typeof height !== "number" || !Number.isFinite(width) || !Number.isFinite(height)) return null;
+  return {
+    width: Math.max(320, Math.min(1920, Math.round(width))),
+    height: Math.max(280, Math.min(1200, Math.round(height))),
+  };
 }
 
 export function hostedServer(service: BrowserService, origin: string, limits: { concurrent: number; daily: number }) {
@@ -211,7 +230,7 @@ export function hostedServer(service: BrowserService, origin: string, limits: { 
     }
     if (path === "/api/tab" && request.method === "POST") {
       if (!session) throw new RequestError(404, "Your browser session has ended.");
-      const { action, url, tabId } = await input(request);
+      const { action, url, tabId, viewport } = await input(request);
       if (!["select", "navigate", "new", "close", "back", "forward", "reload"].includes(action ?? "")) throw new RequestError(400, "Unknown browser action.");
       const target = action === "navigate" || (action === "new" && url) ? destination(url) : null;
       const context = session.browser.context;
@@ -224,8 +243,17 @@ export function hostedServer(service: BrowserService, origin: string, limits: { 
         await page.close();
       } else {
         await context.setActivePage(page);
+        const size = viewportSize(viewport);
+        if (size && ["select", "navigate", "new"].includes(action ?? "")) {
+          await page.setViewportSize(size.width, size.height).catch(() => {});
+        }
         const options = { waitUntil: "domcontentloaded", timeout: 8000 } as const;
-        if (target) await page.goto(target, options);
+        if (target) {
+          try {
+            await page.goto(target, options);
+            if (page.ref.url?.startsWith("chrome-error:")) throw new Error();
+          } catch { throw new RequestError(502, "The remote browser couldn’t finish loading this page. Check the address or try Reload."); }
+        }
         else if (action === "back") await page.goBack(options);
         else if (action === "forward") await page.goForward(options);
         else if (action === "reload") await page.reload(options);
