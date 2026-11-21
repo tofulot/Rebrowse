@@ -3,6 +3,8 @@ services:
     name: rebrowse-live
     runtime: node
     plan: free
+    branch: main
+    autoDeployTrigger: commit
     buildCommand: npm ci --include=dev
     startCommand: npm run start:hosted
     healthCheckPath: /health

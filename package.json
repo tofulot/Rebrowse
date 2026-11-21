@@ -26,8 +26,6 @@
     "smoke:patterns:subq": "tsx scripts/pattern-smoke.ts --live",
     "smoke:restart": "tsx scripts/restart-smoke.ts",
     "replay": "tsx scripts/replay.ts",
-    "replay:calc": "tsx scripts/replay.ts fixtures/recordings/ap-calculus-units.jsonl --live",
-    "replay:mixed": "tsx scripts/replay.ts fixtures/recordings/unrelated-browsing.jsonl --live",
     "smoke:recording": "tsx scripts/recording-smoke.ts",
     "smoke:recording:subq": "tsx scripts/recording-smoke.ts --live"
   },

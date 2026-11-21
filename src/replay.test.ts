@@ -1,13 +1,48 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import { parseRecording, type RecordingRecord } from "./recording.js";
+import { parseRecording, type RecordingRecord, type ReplayExpectation } from "./recording.js";
 import { replayRecording, replayReportMarkdown } from "./replay.js";
 import { collectionEvidence } from "./pattern-evidence.js";
 import type { Prediction } from "./predictor.js";
 import type { TaskHypothesis, WorkflowContext } from "./tasks.js";
 
-const fixture = async (name = "ap-calculus-units") => parseRecording(await readFile(new URL(`../fixtures/recordings/${name}.jsonl`, import.meta.url), "utf8"));
+const reviews = Array.from({ length: 6 }, (_, index) => ({
+  title: `AP Calculus AB Unit ${index + 1} Review - YouTube`,
+  url: "https://www.youtube.com/watch",
+  publicUrl: `https://www.youtube.com/watch?v=test-unit-${index + 1}`,
+}));
+const unrelated = [
+  { title: "Local weather forecast", url: "https://weather.example/forecast" },
+  { title: "Chocolate cake recipe", url: "https://recipes.example/chocolate-cake" },
+  { title: "Camera battery specifications", url: "https://camera.example/battery" },
+];
+
+function recording(
+  pages: { title: string; url: string; publicUrl?: string }[] = reviews,
+  expected: ReplayExpectation = { expectPattern: true, byStep: 2, terms: ["calculus", "review"] },
+) {
+  const startedAt = Date.UTC(2026, 0, 1);
+  const records: RecordingRecord[] = [
+    { type: "session", format: "rebrowse-trajectory-v1", id: "test-recording", name: "Test recording",
+      startedAt, expected, baselineCount: 0, existingTaskCount: 0 },
+    { type: "baseline", atMs: 0, step: 0, frames: [] },
+  ];
+  for (const [index, page] of pages.entries()) {
+    const step = index + 1;
+    const pageId = `tab-${step}`;
+    const atMs = step * 2000;
+    const event = { id: step, pageId, time: startedAt + atMs, kind: "navigate", label: "Opened a page", url: page.url };
+    records.push(
+      { type: "activity", atMs, step, event },
+      { type: "observation", atMs: atMs + 100, step, targetPageId: pageId, frame: {
+        id: step, time: startedAt + atMs + 100, pageId, actor: "user", events: [event],
+        context: { ...page, publicUrl: page.publicUrl ?? page.url, headings: [page.title], actions: [], excerpt: page.title },
+      } },
+    );
+  }
+  records.push({ type: "end", atMs: pages.length * 2000 + 200, step: pages.length, actions: pages.length, reason: "Test complete" });
+  return parseRecording(records.map((record) => JSON.stringify(record)).join("\n"));
+}
 const none = (): Prediction => ({ intent: "Browse", summary: "Limited history", predictions: [{ action: "Continue browsing", confidence: .5, evidence: "An opened page" }], repeatableTask: null });
 function detection(workflow: WorkflowContext): Prediction {
   const series = collectionEvidence(workflow).seriesCandidates[0];
@@ -20,7 +55,7 @@ function detection(workflow: WorkflowContext): Prediction {
 }
 
 test("fresh replay detects at the second prefix with no future frames, goal labels or earlier model answers", async () => {
-  const records = await fixture(); let calls = 0;
+  const records = recording(); let calls = 0;
   if (records[0].type === "session") records[0].expected!.terms.push("SCORING_LABEL_ONLY");
   const report = await replayRecording(records, { mode: "live", predict: async (_context, _events, _signal, _desktop, workflow, clipboard) => {
     calls++; assert.ok(workflow); assert.equal(workflow.knownTasks.length, 0); assert.equal(clipboard, null);
@@ -39,11 +74,11 @@ test("fresh replay detects at the second prefix with no future frames, goal labe
 
 test("positive, negative and fabricated-evidence cases are scored with the production acceptance rules", async () => {
   const predict = (async (_context, _events, _signal, _desktop, workflow) => detection(workflow!)) satisfies NonNullable<Parameters<typeof replayRecording>[1]>["predict"];
-  const positive = await replayRecording(await fixture(), { mode: "live", predict });
+  const positive = await replayRecording(recording(), { mode: "live", predict });
   assert.equal(positive.verdict, "pass"); assert.equal(positive.firstMatchingStep, 2); assert.equal(positive.rows[0].detected, null);
-  const negative = await replayRecording(await fixture("unrelated-browsing"), { mode: "live", predict });
+  const negative = await replayRecording(recording(unrelated, { expectPattern: false, byStep: 2, terms: [] }), { mode: "live", predict });
   assert.equal(negative.verdict, "pass"); assert.equal(negative.firstDetectionStep, null);
-  const bad = await replayRecording(await fixture(), { mode: "live", predict: async (_context, _events, _signal, _desktop, workflow) => {
+  const bad = await replayRecording(recording(), { mode: "live", predict: async (_context, _events, _signal, _desktop, workflow) => {
     const result = detection(workflow!); if (result.repeatableTask?.pattern) result.repeatableTask.pattern.evidenceIds = [99999]; return result;
   } });
   assert.equal(bad.verdict, "fail"); assert.equal(bad.firstDetectionStep, null); assert.ok(bad.rows[1].proposed);
@@ -51,7 +86,7 @@ test("positive, negative and fabricated-evidence cases are scored with the produ
 });
 
 test("recorded-only replay makes no model calls and missing answers or provider failures cannot pass", async () => {
-  const records = await fixture();
+  const records = recording();
   const missing = await replayRecording(records, { predict: async () => { throw new Error("Must not call"); } });
   assert.equal(missing.mode, "recorded"); assert.equal(missing.verdict, "incomplete"); assert.equal(missing.meanInferenceMs, null);
   const failed = await replayRecording(records, { mode: "live", maxSteps: 1, predict: async () => { throw new Error("SubQ request failed (HTTP 429)."); } });
@@ -62,7 +97,7 @@ test("recorded-only replay makes no model calls and missing answers or provider 
 });
 
 test("a future next-step click is excluded even when it precedes the next observation", async () => {
-  const records = await fixture();
+  const records = recording();
   const next = records.find((record): record is Extract<RecordingRecord, { type: "activity" }> => record.type === "activity" && record.step === 2)!;
   next.event.label = "FUTURE_CLICK_LABEL";
   await replayRecording(records, { mode: "live", maxSteps: 1, predict: async (_context, _events, _signal, _desktop, workflow) => {
@@ -72,7 +107,7 @@ test("a future next-step click is excluded even when it precedes the next observ
 });
 
 test("recorded findings replay without inference and keep the original response latencies", async () => {
-  const records = await fixture();
+  const records = recording();
   const frames = records.flatMap((record) => record.type === "observation" && record.step <= 2 ? [record.frame] : []);
   const answer = detection({ observations: frames, knownTasks: [], recentActivity: [] });
   records.push({ type: "prediction", step: 1, atMs: 3600, startedAtMs: 2100, durationMs: 1500, accepted: false, stale: false, prediction: none() },
@@ -83,7 +118,7 @@ test("recorded findings replay without inference and keep the original response 
 });
 
 test("workflow-created resource frames never become new replay steps or user pattern examples", async () => {
-  const records = await fixture();
+  const records = recording();
   for (const record of records) if (record.type === "observation" && record.step >= 2) record.frame.actor = "workflow";
   let calls = 0;
   const report = await replayRecording(records, { mode: "live", predict: async () => { calls++; return none(); } });
@@ -91,7 +126,7 @@ test("workflow-created resource frames never become new replay steps or user pat
 });
 
 test("unlabeled recordings discover the goal and count steps without a name, target, or deadline", async () => {
-  const records = await fixture();
+  const records = recording();
   if (records[0].type === "session") { records[0].expected = null; records[0].name = "SESSION_METADATA_MUST_NOT_BE_AN_INPUT"; }
   let calls = 0;
   const report = await replayRecording(records, { mode: "live", predict: async (context, events, _signal, desktop, workflow) => {
@@ -107,7 +142,7 @@ test("unlabeled recordings discover the goal and count steps without a name, tar
 });
 
 test("automation occurring after a human checkpoint cannot leak its chosen continuation into replay", async () => {
-  const records = await fixture();
+  const records = recording();
   const first = records.find((record): record is Extract<RecordingRecord, { type: "observation" }> => record.type === "observation")!;
   const boundary = records.findIndex((record) => record.type === "activity" && record.step === 2);
   records.splice(boundary, 0, { type: "observation", step: 1, atMs: 2200, targetPageId: first.frame.pageId,
