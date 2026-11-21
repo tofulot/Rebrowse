@@ -26,13 +26,13 @@ const suggestion = (): WorkflowSuggestion => ({
   inputs: [{ name: "items", description: "People to process" }],
   steps: source().steps.map((_step, index) => ({ sourceStep: index + 1, instruction: "Generalized instruction", check: "Verify the expected result for {{item}}" })),
   stopWhen: "Stop when all supplied items have a confirmed outcome; pause if matching or outcome is unclear.",
-  reviewNotes: ["Review profile matching before future use."],
+  notes: ["Review profile matching before future use."],
 });
 
-test("accepted tasks become reusable parameterized drafts with execution disabled", () => {
+test("accepted tasks become parameterized drafts ready for automatic execution", () => {
   const draft = buildWorkflowDraft(source(), null);
-  assert.equal(draft.status, "draft");
-  assert.equal(draft.execution, "disabled");
+  assert.equal(draft.status, "ready");
+  assert.equal(draft.execution, "automatic");
   assert.equal(draft.steps.length, 4);
   assert.ok(draft.inputs.some((input) => input.name === "items"));
   assert.ok(draft.inputs.some((input) => input.name === "source_url"));
@@ -69,19 +69,19 @@ test("extra steps, invalid source mappings and undefined template inputs fall ba
 test("uncertain evidence stays visible for review and regex characters in item names are literal", () => {
   const draft = buildWorkflowDraft(source({ status: "suspected", totalItems: null, cycles: [{ item: "Alex (A)", evidenceIds: [1, 2], outcome: "attempted", outcomeEvidenceId: null }], steps: ["Find Alex (A)", "Check Alex (A)"] }), null);
   assert.match(draft.steps[0]!.instruction, /\{\{item\}\}/);
-  assert.ok(draft.reviewNotes.some((note) => /Only one/.test(note)));
-  assert.ok(draft.reviewNotes.some((note) => /full source list is unknown/.test(note)));
-  assert.ok(draft.reviewNotes.some((note) => /unconfirmed/.test(note)));
+  assert.ok(draft.notes.some((note) => /limited activity/.test(note)));
+  assert.ok(draft.notes.some((note) => /full scope is unknown/.test(note)));
+  assert.ok(draft.notes.some((note) => /unconfirmed/.test(note)));
 });
 
-test("workflow exports are review-only and stable IDs get versioned when rebuilt", () => {
+test("rebuilt workflows keep their ID and include the new version in exports", () => {
   const first = buildWorkflowDraft(source(), null);
   const second = buildWorkflowDraft(source({ updatedAt: 3000 }), suggestion(), first);
   assert.equal(first.id, second.id);
   assert.equal(second.version, 2);
   const report = workflowDraftReport(second);
-  assert.match(report, /DRAFT SUGGESTION.*REVIEW ONLY/);
-  assert.match(report, /Running requires separate explicit approval/);
+  assert.match(report, /AUTOMATIC WORKFLOW/);
+  assert.match(report, /runs in bounded batches/);
   assert.match(report, /\{\{items\}\}/);
   assert.match(report, /Check:/);
   assert.match(report, /Skip and stop rules/);

@@ -37,7 +37,7 @@ const mock: typeof predictNext = async (_context, _events, _signal, _desktop, wo
     nextStep: outcomes.length === 3 ? "Finish the observed list" : jamieState === "blocked" ? "Review the missing match for Jamie Chen before another attempt"
       : jamieState === "in_progress" ? "Check the current item outcome for Jamie Chen" : "Return to the list and search LinkedIn for Jamie Chen",
     continuation: outcomes.length === 3 ? "finished" : "likely",
-    suggestedWorkflow: null,
+    suggestedWorkflow: null, pattern: null,
     workQueue: { sourceObservationId: source.id, sourceListIndex: 0,
       items: people.map((item, index) => ({ item, sourceRow: index + 1, state: index === 2 ? jamieState : "unstarted",
         evidenceId: index === 2 && jamieState !== "unstarted" ? currentJamie!.id : source.id,
@@ -85,7 +85,7 @@ try {
   await tab.goto(dashboard.url);
   await browser.context.setActivePage(page);
   observer = new BrowserObserver(browser.context, dashboard.origin, (event, source) => controller.activity(event, source),
-    (message) => controller.reportError(message), (context, source) => controller.observe(context, source));
+    (message) => controller.reportError(message), (context, source, options) => controller.observe(context, source, options));
   controller.observer = observer;
   await observer.start();
   await until(() => controller.taskMemory.observations.some((frame) => frame.context.lists?.length));
@@ -107,8 +107,8 @@ try {
   assert.equal(task.workQueue.decision, "continue");
   assert.equal(task.workQueue.counts.ready, 1);
   assert.equal(task.workQueue.nextItem, people[2]);
-  assert.equal(task.workflowDraft.status, "draft");
-  assert.equal(task.workflowDraft.execution, "disabled");
+  assert.equal(task.workflowDraft.status, "ready");
+  assert.equal(task.workflowDraft.execution, "automatic");
   assert.ok(task.workflowDraft.inputs.some((input) => input.name === "items"));
   assert.equal(task.workflowDraft.steps.length, task.steps.length);
   assert.ok(task.workflowDraft.steps.every((step, index) => step.sourceStep === index + 1 && step.check.length > 0));
@@ -116,11 +116,11 @@ try {
   assert.equal(sent.size, 2, "Predictions must never send the third invitation");
   await tab.waitForFunction(() => document.querySelector("#workflow-current")?.hasAttribute("hidden") === false);
   assert.match(await tab.evaluate(() => document.querySelector("#workflow-remaining")?.textContent || ""), /Jamie Chen/);
-  await tab.waitForFunction(() => document.querySelector("#queue-decision")?.textContent === "CONTINUE SUGGESTED");
+  await tab.waitForFunction(() => document.querySelector("#queue-decision")?.textContent === "NEXT TARGETS");
   assert.equal(await tab.evaluate(() => document.querySelectorAll('#queue-items [data-state="confirmed"]').length), 2);
   assert.match(await tab.evaluate(() => document.querySelector("#queue-scope")?.textContent || ""), /3 unique items.*1 remaining/);
   await tab.waitForFunction(() => document.querySelector("#workflow-draft")?.hasAttribute("hidden") === false);
-  assert.match(await tab.evaluate(() => document.querySelector("#draft-version")?.textContent || ""), /Not executed/);
+  assert.match(await tab.evaluate(() => document.querySelector("#draft-version")?.textContent || ""), /Automatic/);
   await browser.context.setActivePage(tab);
   await tab.locator("#draft-details > summary").click();
   await tab.waitForFunction(() => document.querySelector("#draft-details")?.hasAttribute("open") === true);
@@ -128,12 +128,12 @@ try {
   const report = await (await fetch(dashboard.url + "tasks.md")).text();
   assert.match(report, /Jamie Chen/);
   assert.match(report, /remaining: 1/);
-  assert.match(report, /DRAFT SUGGESTION/);
+  assert.match(report, /AUTOMATIC WORKFLOW/);
   assert.match(report, /Work queue and stopping assessment/);
   const exportedDraft = await fetch(dashboard.url + `workflow/${task.id}.md`);
   assert.equal(exportedDraft.status, 200);
   const draftText = await exportedDraft.text();
-  assert.match(draftText, /DRAFT SUGGESTION.*REVIEW ONLY/);
+  assert.match(draftText, /AUTOMATIC WORKFLOW/);
   assert.match(draftText, /\{\{items\}\}/);
   assert.match(draftText, /Check:/);
   assert.match(draftText, /Skip and stop rules/);
@@ -143,8 +143,8 @@ try {
   // only observes, even when it suggests continuing or finishing the queue.
   await browser.context.setActivePage(page);
   await page.goto(base + "/linkedin/no-match/2");
-  await until(() => controller.state.tasks[0]?.workQueue.decision === "review" && controller.state.tasks[0]?.workQueue.counts.blocked === 1, 45000);
-  await tab.waitForFunction(() => document.querySelector("#queue-decision")?.textContent === "REVIEW NEEDED");
+  await until(() => controller.state.tasks[0]?.workQueue.decision === "stop" && controller.state.tasks[0]?.workQueue.counts.blocked === 1, 45000);
+  await tab.waitForFunction(() => document.querySelector("#queue-decision")?.textContent === "STOPPED");
   assert.equal(controller.state.tasks[0]!.remainingCount, 1);
   assert.equal(sent.size, 2, "A blocker must not trigger an automatic retry or skip");
   await browser.context.setActivePage(tab);
@@ -159,11 +159,11 @@ try {
   await until(() => controller.state.tasks[0]?.workQueue.decision === "complete", 45000);
   assert.equal(controller.state.tasks[0]!.remainingCount, 0);
   assert.equal(controller.state.tasks[0]!.workQueue.counts.confirmed, 3);
-  await tab.waitForFunction(() => document.querySelector("#queue-decision")?.textContent === "FINISH SUGGESTED");
+  await tab.waitForFunction(() => document.querySelector("#queue-decision")?.textContent === "BATCH FINISHED");
   assert.equal(sent.size, 3, "Only the test driver's explicit local fixture click submitted the last item");
   await browser.context.setActivePage(tab);
   await controller.flushTasks();
-  assert.ok((await readFile(journal.path, "utf8")).trim().split("\n").every((line) => JSON.parse(line).sessionId === controller.taskMemory.sessionId && JSON.parse(line).workflowDraft.execution === "disabled"));
+  assert.ok((await readFile(journal.path, "utf8")).trim().split("\n").every((line) => JSON.parse(line).sessionId === controller.taskMemory.sessionId && JSON.parse(line).workflowDraft.execution === "automatic"));
   await tab.evaluate(() => window.scrollTo(0, 0));
   await writeFile("/tmp/rebrowse-workflow-desktop.png", await tab.screenshot({ fullPage: true }));
   await tab.setViewportSize(390, 844);
@@ -171,7 +171,7 @@ try {
   await writeFile("/tmp/rebrowse-workflow-mobile.png", await tab.screenshot({ fullPage: true }));
   await tab.evaluate(() => document.querySelector(".queue-panel")?.scrollIntoView());
   await writeFile("/tmp/rebrowse-queue-mobile.png", await tab.screenshot());
-  console.log(`Passed: ${live ? "live SubQ" : "simulated"} work queue, continue/review/in-progress/finish states, reusable draft, exports, local persistence, responsive layout, and no automatic actions.`);
+  console.log(`Passed: ${live ? "live SubQ" : "simulated"} work queue, continuation/unavailable/in-progress/finish states, reusable workflow, exports, local persistence, responsive layout, and no automatic actions.`);
 } finally {
   controller.stop();
   await observer?.stop();

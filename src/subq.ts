@@ -1,11 +1,21 @@
 import type { ClientLLM } from "@browserbasehq/stagehand";
 
 type GenerateParams = Parameters<ClientLLM["generate"]>[0];
+const DEFAULT_MODEL = "subq-savant-1.4";
+
+export function subqModelName() {
+  const configured = process.env.SUBQ_MODEL?.trim();
+  return !configured || configured === "subq-preview" ? DEFAULT_MODEL : configured;
+}
+
+export function createConfiguredSubqModel(signal?: AbortSignal) {
+  return createSubqModel(process.env.SUBQ_API_KEY?.trim() ?? "", subqModelName(), fetch, signal);
+}
 
 /** Stagehand v4 custom model callback; all inference goes directly to SubQ. */
 export function createSubqModel(
   apiKey: string,
-  model = "subq-preview",
+  model = DEFAULT_MODEL,
   request: typeof fetch = fetch,
   signal?: AbortSignal,
 ): ClientLLM {
@@ -45,11 +55,8 @@ export function createSubqModel(
           ],
           stream: false,
           store: false,
-          // Preview currently puts analysis into content with "none". "low"
-          // keeps reasoning separate from the JSON that Stagehand consumes.
           reasoning_effort: "low",
           max_tokens: 8192,
-          ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
           ...(params.stopSequences?.length ? { stop: params.stopSequences } : {}),
           ...(format?.type === "json_schema" ? {
             response_format: {
@@ -63,7 +70,7 @@ export function createSubqModel(
         const detail: Record<number, string> = {
           401: "Check SUBQ_API_KEY.",
           402: "Check your SubQ credits.",
-          403: "Check that this key has access to subq-preview.",
+          403: `Check that this key has access to ${model}.`,
           429: "SubQ rate limit reached. Try again later.",
         };
         // Do not print response bodies: providers can echo request content.

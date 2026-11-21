@@ -20,7 +20,7 @@ const task = (overrides: Partial<TaskHypothesis> = {}): TaskHypothesis => ({
     { item: "Alex Morgan", evidenceIds: [1, 2], outcome: "confirmed", outcomeEvidenceId: 2 },
     { item: "Sam Rivera", evidenceIds: [1, 3], outcome: "confirmed", outcomeEvidenceId: 3 },
   ], totalItems: 3, totalEvidenceId: 1, remainingItems: ["Jamie Chen"], remainingEvidenceId: 1,
-  currentItem: null, nextStep: "Return to the list and search LinkedIn for Jamie Chen", continuation: "likely", suggestedWorkflow: null, workQueue: null, ...overrides,
+  currentItem: null, nextStep: "Return to the list and search LinkedIn for Jamie Chen", continuation: "likely", suggestedWorkflow: null, pattern: null, workQueue: null, ...overrides,
 });
 
 test("two distinct cycles produce an evidence-backed detection with one known remaining item", () => {
@@ -34,7 +34,7 @@ test("two distinct cycles produce an evidence-backed detection with one known re
   assert.equal(record.evidence.length, 3);
   assert.equal(memory.accept(task()), null, "Repeated model refresh must not duplicate journal entries");
   assert.equal(memory.log.length, 1);
-  assert.equal(record.workflowDraft.execution, "disabled");
+  assert.equal(record.workflowDraft.execution, "automatic");
   assert.equal(record.workflowDraft.version, 1);
   assert.equal(memory.tasks[0]!.workflowDraft.id, record.workflowDraft.id);
 });
@@ -68,7 +68,7 @@ test("clicks alone remain attempts and a missing list does not invent a remainin
   assert.equal(record.remainingCount, null);
   assert.deepEqual(record.remainingItems, ["Alex Morgan", "Sam Rivera"]);
   assert.equal(record.workQueue.counts.blocked, 2);
-  assert.equal(record.workQueue.decision, "review");
+  assert.equal(record.workQueue.decision, "stop");
   assert.equal(record.status, "uncertain");
 });
 
@@ -142,12 +142,12 @@ test("journal persists assessments and export documents evidence and unknown pro
     const stored = JSON.parse((await readFile(journal.path, "utf8")).trim());
     assert.equal(stored.id, record.id);
     assert.equal(stored.remainingItems[0], "Jamie Chen");
-    assert.equal(stored.workflowDraft.execution, "disabled");
+    assert.equal(stored.workflowDraft.execution, "automatic");
     const report = taskReport([record]);
-    assert.match(report, /Predictions do not execute actions/);
+    assert.match(report, /Workflows can run automatically/);
     assert.match(report, /Jamie Chen/);
     assert.match(report, /Supporting observations/);
     assert.match(report, /remaining: 1/);
-    assert.match(report, /DRAFT SUGGESTION/);
+    assert.match(report, /AUTOMATIC WORKFLOW/);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

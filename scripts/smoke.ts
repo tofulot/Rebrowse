@@ -1,3 +1,4 @@
+import "dotenv/config";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -48,4 +49,3 @@ try {
     await rm(profile, { recursive: true, force: true });
   }
 }
-import "dotenv/config";

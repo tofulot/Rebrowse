@@ -71,8 +71,8 @@ function nativeHarness() {
   const page = { pageId: "page", url: async () => "https://example.com", evaluate: async () => allowed } as unknown as Page;
   const dashboard = { pageId: "dashboard", url: async () => "http://dashboard/session" } as unknown as Page;
   const events: Activity[] = []; const statuses: string[] = [];
-  const context = { activePage: async () => active ? page : dashboard, pages: async () => [], clipboard: { readText: async () => { reads++; return read(); } } } as unknown as BrowserContext;
-  const observer = new BrowserObserver(context, "http://dashboard", (event) => events.push(event), () => {}, undefined, (status) => statuses.push(status));
+  const context = { activePage: async () => active ? page : dashboard, pages: async () => [], clipboard: { readText: async () => { throw new Error("An observer must not invoke the focus-changing browser clipboard reader"); } } } as unknown as BrowserContext;
+  const observer = new BrowserObserver(context, "http://dashboard", (event) => events.push(event), () => {}, undefined, (status) => statuses.push(status), async () => { reads++; return read(); });
   const sample = (version = 1, overrides: Partial<DesktopSample> = {}): DesktopSample => ({ time: Date.now(), active: true, accessibility: true, focus: "page", addressSelected: false, clipboardVersion: version, ...overrides });
   return { observer, events, statuses, sample, reads: () => reads, setAllowed: (next: boolean) => { allowed = next; }, setActive: (next: boolean) => { active = next; }, setValue: (next: string) => { value = next; }, setRead: (next: () => Promise<string>) => { read = next; }, page };
 }
@@ -114,4 +114,24 @@ test("workflow observation memory retains clipboard metadata without raw transfe
   memory.observe({ url: "https://example.com", title: "List", headings: [], actions: [], excerpt: "" }, "page", [{ id: 1, pageId: "page", time: Date.now(), kind: "copy", label: "Copied", url: "https://example.com", clipboard: text("Raw transfer to exclude") }]);
   assert.doesNotMatch(JSON.stringify(memory.observations), /Raw transfer to exclude/);
   assert.equal(memory.observations[0]?.events[0]?.clipboard?.source, "page");
+});
+
+test("repeated address-bar selections and clipboard shortcuts never focus a page or clear selection", async () => {
+  let selected = true; let passiveReads = 0; let pageFocusCalls = 0;
+  const page = { pageId: "content", url: async () => "https://example.com" } as unknown as Page;
+  const context = { activePage: async () => page,
+    setActivePage: async () => { selected = false; pageFocusCalls++; },
+    clipboard: { readText: async () => { selected = false; pageFocusCalls++; return "Wrong focus-changing path"; } },
+  } as unknown as BrowserContext;
+  const events: Activity[] = [];
+  const observer = new BrowserObserver(context, "http://dashboard", (event) => events.push(event), () => {}, undefined, undefined,
+    async () => { passiveReads++; return "Copied query"; });
+  for (let i = 0; i < 8; i++) {
+    await observer.sampleClipboard({ time: Date.now(), active: true, accessibility: true, focus: "address-bar", addressSelected: true, clipboardVersion: 1 });
+    assert.equal(selected, true);
+  }
+  await observer.sampleClipboard({ time: Date.now(), active: true, accessibility: true, focus: "address-bar", addressSelected: true, clipboardVersion: 1,
+    clipboardShortcut: { id: 1, kind: "copy", target: "address-bar" } });
+  assert.equal(pageFocusCalls, 0); assert.equal(passiveReads, 2); assert.equal(selected, true);
+  assert.equal(events.at(-1)?.clipboard?.text, "Copied query"); await observer.stop();
 });

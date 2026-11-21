@@ -5,6 +5,7 @@ import { PredictionDashboard } from "./dashboard.js";
 import { cleanUrl, type Activity } from "./observer.js";
 import type { Prediction } from "./predictor.js";
 import { CLIPBOARD_TTL_MS } from "./clipboard-context.js";
+import type { TaskHypothesis } from "./tasks.js";
 
 const page = { pageId: "test", url: async () => "https://example.com/products", evaluate: async () => ({ title: "Products", url: "https://example.com/products", headings: [], actions: [], excerpt: "" }) } as unknown as Page;
 const event = (id: number): Activity => ({ id, pageId: "test", time: Date.now(), kind: "click", label: "Product details", url: "https://example.com/products" });
@@ -139,6 +140,73 @@ test("live page updates add memory without starving an in-flight prediction", as
     assert.equal(dashboard.state.prediction?.intent, "Available result");
     assert.equal(dashboard.state.stale, true, "Newer DOM evidence should mark the result for refresh");
     assert.ok(dashboard.state.observationCount >= 2);
+  } finally { dashboard.stop(); }
+});
+
+test("background reviews enter pattern history without replacing the foreground prediction target", async () => {
+  let predictedUrl = "";
+  const dashboard = new PredictionDashboard({ isConfigured: () => true, debounceMs: 0, intervalMs: 0,
+    predict: async (context, _events, _signal, _desktop, workflow) => {
+      predictedUrl = context.url;
+      assert.ok(workflow?.observations.some((frame) => frame.context.title === "AP Calculus Unit 2 Review"));
+      return prediction("Collect unit guides");
+    } });
+  try {
+    dashboard.activity(event(1), page);
+    const background = { pageId: "background" } as Page;
+    dashboard.observe({ url: "https://example.com/unit/2", title: "AP Calculus Unit 2 Review", headings: [], actions: [], excerpt: "" }, background, { background: true });
+    await waitUntil(() => !!dashboard.state.prediction);
+    assert.equal(predictedUrl, "https://example.com/products");
+  } finally { dashboard.stop(); }
+});
+
+test("a late scan of an agent-opened resource cannot relabel it as a new human example", async () => {
+  const context = { title: "AP Calculus Unit 3 Review", url: "https://example.com/unit/3", headings: [], actions: [], excerpt: "" };
+  const automatedPage = { pageId: "automated", url: async () => context.url, evaluate: async () => context } as unknown as Page;
+  const dashboard = new PredictionDashboard({ isConfigured: () => true, debounceMs: 0, intervalMs: 0,
+    predict: async (_context, _events, _signal, _desktop, workflow) => {
+      assert.ok(workflow?.observations.every((frame) => frame.actor === "workflow"));
+      return prediction("The automated batch is finished");
+    } });
+  try {
+    dashboard.taskMemory.observe(context, automatedPage.pageId, [], Date.now() - 100, "workflow");
+    dashboard.activity({ ...event(1), pageId: automatedPage.pageId, kind: "navigate", url: context.url }, automatedPage);
+    dashboard.observe(context, automatedPage, { background: true });
+    await waitUntil(() => !!dashboard.state.prediction);
+    assert.equal(dashboard.taskMemory.observations.length, 1);
+    assert.equal(dashboard.taskMemory.observations[0]?.actor, "workflow");
+  } finally { dashboard.stop(); }
+});
+
+test("a finished pattern analysis survives another click but cannot execute from a stale next-action result", async () => {
+  const complete: Array<(value: Prediction) => void> = [];
+  const dashboard = new PredictionDashboard({ isConfigured: () => true, debounceMs: 0, intervalMs: 0, autoDelayMs: 0,
+    predict: async () => new Promise((resolve) => complete.push(resolve)) });
+  dashboard.attachRunner({ driver: async () => { throw new Error("A stale prediction must not run"); } });
+  const evidenceIds: number[] = [];
+  for (const unit of [1, 2]) {
+    dashboard.taskMemory.observe({ url: `https://example.com/unit/${unit}`, title: `AP Calculus Unit ${unit} Review`, headings: [], actions: [], excerpt: "" }, `unit${unit}`, []);
+    evidenceIds.push(dashboard.taskMemory.observations.at(-1)!.id);
+  }
+  const task: TaskHypothesis = { taskId: null, title: "Collect AP Calculus unit reviews", confidence: .85,
+    steps: ["Open the review for {{item}}"], reason: "Two unit reviews share a goal", cycles: [], totalItems: null, totalEvidenceId: null,
+    remainingItems: [], remainingEvidenceId: null, currentItem: null, nextStep: "Open the next unit review", continuation: "likely", suggestedWorkflow: null, workQueue: null,
+    pattern: { action: "Collect unit reviews", repeatLikelihood: .9, reason: "Two distinct units", evidenceIds, operation: "open_tabs", goal: "resources",
+      endCondition: "Stop after this bounded batch", endKnown: false, maxItems: 1, targets: [{ item: "Unit 3", url: "https://example.com/unit/3", basis: "inferred" }] } };
+  try {
+    dashboard.activity(event(1), page);
+    await waitUntil(() => complete.length === 1);
+    dashboard.activity({ ...event(2), kind: "hover" }, page);
+    dashboard.activity({ ...event(3), kind: "scroll" }, page);
+    dashboard.activity(event(4), page);
+    complete[0]!({ ...prediction("Older immediate action"), repeatableTask: task });
+    await waitUntil(() => complete.length === 2);
+    assert.equal(dashboard.state.prediction, null);
+    assert.equal(dashboard.state.tasks[0]?.title, task.title);
+    assert.equal(dashboard.state.taskLog.length, 1);
+    assert.equal(dashboard.runner?.state, null);
+    complete[1]!(prediction("Current action"));
+    await waitUntil(() => dashboard.state.status === "ready");
   } finally { dashboard.stop(); }
 });
 

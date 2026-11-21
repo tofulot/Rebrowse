@@ -76,8 +76,12 @@ try {
   const base = `http://127.0.0.1:${address.port}`;
   const page = await browser.context.newPage(); await page.goto(base + "/list");
   const tab = await browser.context.newPage(); await tab.goto(dashboard.url);
+  // Headless Chrome has its own clipboard. Inject that fixture reader; the
+  // application uses the passive native reader, never this focusing SDK path.
+  let reads = 0;
   observer = new BrowserObserver(browser.context, dashboard.origin, (event, page) => controller.activity(event, page), (message) => controller.reportError(message),
-    (context, page) => controller.observe(context, page), (status) => controller.clipboardStatus(status));
+    (context, page, options) => controller.observe(context, page, options), (status) => controller.clipboardStatus(status),
+    async () => { reads++; return browser!.context.clipboard.readText({ page }); });
   controller.observer = observer; await observer.start(); await browser.context.setActivePage(page);
   await page.evaluate(() => { const range = document.createRange(); range.selectNodeContents(document.querySelector("#name")!); window.getSelection()?.removeAllRanges(); window.getSelection()?.addRange(range); });
   await browser.context.clipboard.copy({ page }); await rememberClipboardVersion();
@@ -99,8 +103,6 @@ try {
     await until(() => controller.state.clipboard.status === "redacted");
     assert.equal(controller.state.clipboard.context?.text, undefined);
   }
-  let reads = 0; const readText = browser.context.clipboard.readText.bind(browser.context.clipboard);
-  browser.context.clipboard.readText = async (options) => { reads++; return readText(options); };
   await observer.sampleClipboard({ time: Date.now(), active: true, accessibility: true, focus: "page", addressSelected: false, clipboardVersion: 1 });
   assert.equal(reads, 0, "Native sampling must not bypass a protected page field");
   await page.locator("#search").click();

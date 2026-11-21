@@ -91,6 +91,25 @@ func foregroundPID() -> pid_t? {
     return NSWorkspace.shared.frontmostApplication?.processIdentifier
 }
 
+if CommandLine.arguments.contains("--read-clipboard") {
+    // Passive OS read: do not activate a tab, focus a web page, or touch the
+    // user's address-bar selection. Check the browser and clipboard version
+    // both before and after resolving text from the pasteboard.
+    let board = NSPasteboard.general
+    guard let versionIndex = CommandLine.arguments.firstIndex(of: "--clipboard-version"),
+          CommandLine.arguments.count > versionIndex + 1,
+          let expectedVersion = Int(CommandLine.arguments[versionIndex + 1]),
+          foregroundPID() == pid, board.changeCount == expectedVersion else {
+        output(["unavailable": true]); exit(0)
+    }
+    let text = board.string(forType: .string) ?? ""
+    guard foregroundPID() == pid, board.changeCount == expectedVersion else {
+        output(["unavailable": true]); exit(0)
+    }
+    output(["text": String(text.prefix(2049))])
+    exit(0)
+}
+
 // Observe only the three clipboard shortcuts in this browser's controls.
 // Never read event.characters or collect other keys or other applications.
 var pendingClipboardShortcut: [String: Any]?
@@ -119,7 +138,7 @@ repeat {
         let frontPID = foregroundPID()
         let active = frontPID == pid
         let otherChrome = frontPID != nil && !active && NSRunningApplication(processIdentifier: frontPID!)?.bundleIdentifier == "com.google.Chrome"
-        var sample: [String: Any] = ["time": Int(Date().timeIntervalSince1970 * 1000), "active": active, "accessibility": trusted, "focus": "unknown", "addressSelected": false, "focusAvailable": false, "otherBrowserActive": otherChrome]
+        var sample: [String: Any] = ["time": Int(Date().timeIntervalSince1970 * 1000), "browserPid": Int(pid), "active": active, "accessibility": trusted, "focus": "unknown", "addressSelected": false, "focusAvailable": false, "otherBrowserActive": otherChrome]
         if (active || inspectFocus) && trusted {
             if let focused = elementAttribute(application, kAXFocusedUIElementAttribute) {
                 let focusRegion = region(focused)

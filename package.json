@@ -1,11 +1,13 @@
 {
   "name": "rebrowse",
   "version": "1.0.0",
-  "description": "A local Stagehand browser prototype for predictive browsing",
+  "description": "A local Chrome session that predicts browsing actions and runs repeatable workflows",
   "scripts": {
     "start": "tsx src/index.ts",
+    "start:hosted": "tsx src/hosted.ts",
     "check": "tsc --noEmit",
     "test": "tsx --test src/*.test.ts",
+    "verify": "npm run check && npm test && npm run smoke && npm run smoke:predictions && npm run smoke:automatic && npm run smoke:recording",
     "smoke": "tsx scripts/smoke.ts",
     "smoke:subq": "tsx scripts/smoke.ts --live",
     "smoke:predictions": "tsx scripts/predictions-smoke.ts",
@@ -16,14 +18,23 @@
     "smoke:runner": "tsx scripts/runner-smoke.ts",
     "smoke:runner:subq": "tsx scripts/runner-smoke.ts --live",
     "smoke:clipboard": "tsx scripts/clipboard-smoke.ts",
-    "smoke:clipboard:subq": "tsx scripts/clipboard-smoke.ts --live"
+    "smoke:clipboard:subq": "tsx scripts/clipboard-smoke.ts --live",
+    "smoke:automatic": "tsx scripts/automatic-smoke.ts",
+    "smoke:automatic:subq": "tsx scripts/automatic-smoke.ts --live",
+    "smoke:focus": "tsx scripts/focus-smoke.ts",
+    "smoke:patterns": "tsx scripts/pattern-smoke.ts",
+    "smoke:patterns:subq": "tsx scripts/pattern-smoke.ts --live",
+    "smoke:restart": "tsx scripts/restart-smoke.ts",
+    "replay": "tsx scripts/replay.ts",
+    "replay:calc": "tsx scripts/replay.ts fixtures/recordings/ap-calculus-units.jsonl --live",
+    "replay:mixed": "tsx scripts/replay.ts fixtures/recordings/unrelated-browsing.jsonl --live",
+    "smoke:recording": "tsx scripts/recording-smoke.ts",
+    "smoke:recording:subq": "tsx scripts/recording-smoke.ts --live"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/tofulot/Rebrowse.git"
   },
-  "keywords": [],
-  "author": "",
   "license": "ISC",
   "type": "module",
   "bugs": {

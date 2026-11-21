@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: rebrowse-live
+    runtime: node
+    plan: free
+    buildCommand: npm ci --include=dev
+    startCommand: npm run start:hosted
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "24.x"
+      - key: BROWSERBASE_API_KEY
+        sync: false
+      - key: BROWSERBASE_PROJECT_ID
+        sync: false
+      - key: SUBQ_API_KEY
+        sync: false

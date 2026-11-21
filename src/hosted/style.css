@@ -1,0 +1,66 @@
+:root {
+  font: 1rem/1.5 Inter, system-ui, sans-serif;
+  color: #243628;
+  background: #f7f8f3;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; }
+[hidden] { display: none !important; }
+button, input { font: inherit; }
+button {
+  padding: .45rem .8rem;
+  color: inherit;
+  background: #fff;
+  border: 1px solid #d4ddcc;
+  border-radius: .45rem;
+  cursor: pointer;
+}
+button:disabled { opacity: .55; cursor: wait; }
+:focus-visible { outline: 2px solid #4e6b37; outline-offset: 2px; }
+
+.topbar {
+  min-height: 4rem;
+  padding: .7rem clamp(1rem, 4vw, 3rem);
+  background: #edf1e7;
+  border-bottom: 1px solid #dce3d4;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.brand { font-size: 1.25rem; letter-spacing: -.04em; }
+.session-controls { display: flex; align-items: center; gap: .75rem; font-size: .875rem; }
+.welcome { max-width: 45rem; margin: clamp(4rem, 14vh, 10rem) auto 2rem; padding: 0 1.5rem; }
+.welcome h1 { font: 400 clamp(2.5rem, 6vw, 4.5rem)/1.03 Georgia, serif; letter-spacing: -.05em; margin: 0; }
+.welcome p { max-width: 34rem; color: #435346; }
+#start, #go { background: #263e2c; border-color: #263e2c; color: #fff; }
+#start { margin: .65rem 0; padding: .7rem 1.25rem; }
+.welcome .privacy { font-size: .875rem; color: #536454; }
+#status { margin: .75rem 1rem; padding: .65rem .9rem; border: 1px solid #d4ddcc; border-radius: .45rem; background: #edf1e7; }
+
+.workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(20rem, 27rem); gap: 1rem; padding: 1rem; }
+.browser, #dashboard { min-width: 0; border: 1px solid #d4ddcc; border-radius: .65rem; background: #fff; }
+.browser { overflow: hidden; display: flex; flex-direction: column; }
+.tabs, .navigation { display: flex; align-items: center; gap: .35rem; padding: .5rem; background: #edf1e7; }
+.navigation { border-top: 1px solid #dce3d4; }
+#tabs { display: flex; gap: .35rem; overflow: auto; }
+.tab { display: flex; min-width: 0; flex: 0 0 auto; }
+.tab button { font-size: .875rem; padding: .35rem .6rem; white-space: nowrap; }
+.tab button:first-child { max-width: 11rem; overflow: hidden; text-overflow: ellipsis; border-radius: .35rem 0 0 .35rem; }
+.tab button:last-child { border-radius: 0 .35rem .35rem 0; border-left: 0; }
+.tab button[aria-pressed="true"] { background: #dce7d3; }
+#new { padding: .25rem .6rem; }
+#address { min-width: 0; flex: 1; padding: .45rem .6rem; border: 1px solid #d4ddcc; border-radius: .4rem; color: inherit; }
+.viewport { display: grid; place-items: center; flex: 1; min-height: 25rem; }
+#browser-message { margin: 1rem; text-align: center; color: #536454; }
+#browser, #dashboard { width: 100%; height: max(25rem, calc(100dvh - 12rem)); }
+#browser { border: 0; }
+#dashboard { height: max(30rem, calc(100dvh - 6rem)); }
+
+@media (max-width: 52rem) {
+  .workspace { grid-template-columns: minmax(0, 1fr); }
+  .viewport, #browser { min-height: 20rem; height: 54dvh; }
+  #dashboard { height: 34rem; }
+  .navigation button { padding-inline: .55rem; }
+}

@@ -32,12 +32,14 @@ const fixture = createServer((request, response) => {
 await new Promise<void>((resolve) => fixture.listen(0, "127.0.0.1", resolve));
 const address = fixture.address(); assert(address && typeof address !== "string");
 const base = `http://127.0.0.1:${address.port}`;
-const controller = new PredictionDashboard({ isConfigured: () => true, journal: new TaskJournal(join(directory, "tasks.jsonl")) });
+let detected: TaskHypothesis | null = null;
+const controller = new PredictionDashboard({ isConfigured: () => true, debounceMs: 0, intervalMs: 0, autoDelayMs: 50,
+  predict: async () => ({ intent: detected?.title || 'Waiting', summary: 'Known repeating sequence', predictions: [{ action: 'Continue the next known item', confidence: .8, evidence: 'Observed source list' }], repeatableTask: detected }), journal: new TaskJournal(join(directory, "tasks.jsonl")) });
 const server = await startDashboard(controller);
 let browser: Awaited<ReturnType<typeof localBrowser.launch>> | undefined;
 const plan: StepPlanner = async ({ step, item, snapshot }) => {
   const page = snapshot.context;
-  if (page.excerpt.includes("No matching profile")) return { status: "review", instruction: "", reason: `No matching profile for ${item}.`, evidence: ["No matching profile"] };
+  if (page.excerpt.includes("No matching profile")) return { status: "skip", instruction: "", reason: `No matching profile for ${item}.`, evidence: ["No matching profile"] };
   if (page.actions.includes("Pending")) return { status: "item_complete", instruction: "", reason: "Invitation visibly sent", evidence: ["Invitation sent"] };
   if (step === 1) return { status: "step_complete", instruction: "", reason: "Source list open", evidence: ["Prospect outreach"] };
   if (step === 2 && page.url.includes("/search/") || step === 3 && page.url.includes("/profile/")) return { status: "step_complete", instruction: "", reason: "Matching named page open", evidence: [item] };
@@ -63,9 +65,11 @@ async function seed(page: Page, mode: string) {
   const candidate: TaskHypothesis = { taskId: null, title: `Send LinkedIn invitations (${mode})`, confidence: .9,
     steps: ["Open the prospect list", "Click Search {{item}} on LinkedIn", "Open the matching profile for {{item}}", "Click Connect and confirm Invitation sent for {{item}}"],
     reason: "Observed two distinct named outcomes", cycles, totalItems: names.length, totalEvidenceId: sourceId, remainingItems: names.slice(2), remainingEvidenceId: sourceId,
-    currentItem: null, nextStep: "Continue with the next name", continuation: "likely", suggestedWorkflow: null, workQueue: null };
+    currentItem: null, nextStep: "Continue with the next name", continuation: "likely", suggestedWorkflow: null, pattern: null, workQueue: null };
   const task = controller.taskMemory.accept(candidate)!; assert(task);
   controller.state.tasks = controller.taskMemory.tasks; controller.state.taskLog = controller.taskMemory.log; controller.state.activeTaskId = task.id;
+  detected = { ...candidate, taskId: task.id };
+  await page.goto(`${base}/${mode}/list`);
   controller.setPaused(false);
   return task;
 }
@@ -86,20 +90,20 @@ try {
   const task = await seed(content, "success");
   await dashboard.goto(server.url);
   await browser.context.setActivePage(dashboard);
-  await dashboard.waitForFunction(() => !(document.querySelector("#workflow-approve") as HTMLButtonElement)?.disabled);
-  assert.equal(sent.size, 2, "A suggestion cannot execute without approval");
-  await dashboard.locator("#workflow-approve").click();
+  assert.equal(await dashboard.locator("#workflow-approve").count(), 0);
+  assert.equal(sent.size, 2, "The test has not supplied its triggering user activity yet");
+  controller.activity({ id: Date.now(), pageId: content.pageId, time: Date.now(), kind: "navigate", label: "Opened the next source list", url: await content.url() }, content);
   await until(() => !controller.executionBusy && !!controller.runner?.state);
   assert.equal(controller.runner!.state!.status, "complete", JSON.stringify(controller.runner!.state));
   assert.equal(task.workQueue.counts.remaining, 0); assert.equal(sent.size, names.length);
   await browser.context.setActivePage(dashboard);
-  await dashboard.waitForFunction(() => document.querySelector("#run-status")?.textContent === "COMPLETE · STOPPED");
+  await dashboard.waitForFunction(() => document.querySelector("#run-status")?.textContent === "BATCH FINISHED");
   await until(() => !controller.executionBusy);
   assert.equal(await dashboard.locator("#workflow-run-pause").isVisible(), false);
-  assert.equal(controller.state.activity.length, 0);
+  assert.equal(controller.state.activity.length, 1, "Only the human trigger belongs in activity history");
   const stored = (await readFile(join(directory, "runs.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
   assert.equal(stored.at(-1).status, "complete");
-  assert.match(await (await fetch(server.url + "tasks.md")).text(), /Outcomes confirmed by approved workflow runs: Jamie Chen/);
+  assert.match(await (await fetch(server.url + "tasks.md")).text(), /Outcomes confirmed by automatic workflow runs: Jamie Chen/);
   await dashboard.evaluate(() => document.querySelector("#workflow-run")?.scrollIntoView());
   await writeFile("/tmp/rebrowse-run-complete.png", await dashboard.screenshot());
   if (!live) {
@@ -107,15 +111,15 @@ try {
     const blocked = await seed(content, "blocked");
     await dashboard.reload();
     await browser.context.setActivePage(dashboard);
-    await dashboard.waitForFunction(() => !(document.querySelector("#workflow-approve") as HTMLButtonElement)?.disabled);
-    await dashboard.locator("#workflow-approve").click();
+    assert.equal(await dashboard.locator("#workflow-approve").count(), 0);
+    controller.activity({ id: Date.now(), pageId: content.pageId, time: Date.now(), kind: "navigate", label: "Opened the next source list", url: await content.url() }, content);
     await until(() => !controller.executionBusy && controller.runner?.state?.taskId === blocked.id);
-    assert.equal(controller.runner!.state!.status, "paused");
-    assert.equal(blocked.workQueue.counts.blocked, 1); assert.equal(sent.size, names.length + 2);
-    assert.equal(blocked.workQueue.items.find((item) => item.item === "Taylor Reed")?.state, "unstarted");
+    assert.equal(controller.runner!.state!.status, "complete");
+    assert.equal(blocked.workQueue.counts.blocked, names.length - 2); assert.equal(sent.size, names.length + 2);
+    assert.equal(blocked.workQueue.items.find((item) => item.item === "Taylor Reed")?.state, "blocked");
     await browser.context.setActivePage(dashboard);
-    await dashboard.waitForFunction(() => document.querySelector("#run-status")?.textContent === "PAUSED · REVIEW NEEDED");
-    assert.equal(await dashboard.evaluate(() => (document.querySelector("#workflow-approve") as HTMLButtonElement).disabled), true);
+    await dashboard.waitForFunction(() => document.querySelector("#run-status")?.textContent === "BATCH FINISHED");
+    assert.equal(await dashboard.locator("#workflow-approve").count(), 0);
     await dashboard.evaluate(() => document.querySelector("#workflow-run")?.scrollIntoView());
     await writeFile("/tmp/rebrowse-run-review.png", await dashboard.screenshot());
     await dashboard.setViewportSize(390, 844);
@@ -123,7 +127,7 @@ try {
     await dashboard.evaluate(() => document.querySelector("#workflow-run")?.scrollIntoView());
     await writeFile("/tmp/rebrowse-run-mobile.png", await dashboard.screenshot());
   }
-  console.log(`Passed: ${live ? "live SubQ" : "simulated planning with real Stagehand actions"}, dashboard approval, skipped completed items, verified queue completion${live ? "" : ", missing-match pause"}, run journal, and no execution before approval.`);
+  console.log(`Passed: ${live ? "live SubQ" : "simulated planning with real Stagehand actions"}, automatic prediction-triggered execution, skipped completed items, verified queue completion${live ? "" : ", missing-match skipping"}, run journal, and no approval controls.`);
 } finally {
   controller.stop(); await controller.finishExecution(); await controller.flushTasks();
   await browser?.close(); await server.close(); fixture.closeAllConnections();

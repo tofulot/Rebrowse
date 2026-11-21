@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises";
 import type { BrowserContext, CDPSubscription, Page } from "@browserbasehq/stagehand";
 import { z } from "zod";
-import type { DesktopSample } from "./desktop-context.js";
+import { readNativeClipboardText, type DesktopSample } from "./desktop-context.js";
 import { clipboardEnabled, sanitizeClipboard, type ClipboardData, type ClipboardState } from "./clipboard-context.js";
+import { resourceUrl } from "./workflow-pattern.js";
 
 export type Activity = { id: number; pageId: string; time: number; kind: string; label: string; url: string; addressText?: string; clipboard?: ClipboardData };
 const marker = "__rebrowse_activity_v1__";
@@ -29,7 +30,8 @@ function installScript(dashboardOrigin: string) {
   return `(${collector})(${JSON.stringify({ marker, dashboardOrigin, clipboardEnabled: clipboardEnabled() })})`;
 }
 
-export type PageContext = { url: string; title: string; headings: string[]; actions: string[]; excerpt: string; lists?: Array<{ label: string; items: string[]; truncated: boolean }> };
+export type PageContext = { url: string; publicUrl?: string; title: string; headings: string[]; actions: string[]; excerpt: string; links?: Array<{ title: string; url: string }>; lists?: Array<{ label: string; items: string[]; truncated: boolean }> };
+export type ObservationOptions = { background?: boolean };
 
 export async function readContext(page: Page): Promise<PageContext> {
   const url = await page.url();
@@ -37,12 +39,14 @@ export async function readContext(page: Page): Promise<PageContext> {
     return { url, title: "New tab", headings: [], actions: [], excerpt: "No website is open. Browser navigation and search controls are available." };
   }
   const context = await page.evaluate<PageContext>(`(${contextReader})()`);
-  return { ...context, url: cleanUrl(context.url) };
+  return { ...context, url: cleanUrl(context.url), publicUrl: resourceUrl(context.url) || undefined,
+    links: context.links?.flatMap((link) => { const url = resourceUrl(link.url); return url ? [{ title: link.title, url }] : []; }) };
 }
 
 export class BrowserObserver {
   private subscriptions = new Map<string, CDPSubscription>();
   private urls = new Map<string, string>();
+  private titles = new Map<string, string>();
   private timer?: ReturnType<typeof setTimeout>;
   private stopped = false;
   private sequence = 0;
@@ -64,8 +68,9 @@ export class BrowserObserver {
     private dashboardOrigin: string,
     private onActivity: (activity: Activity, page: Page) => void,
     private onError: (message: string) => void,
-    private onContext?: (context: PageContext, page: Page) => void,
+    private onContext?: (context: PageContext, page: Page, options?: ObservationOptions) => void,
     private onClipboardStatus?: (status: ClipboardState["status"]) => void,
+    private readClipboard: (sample: DesktopSample) => Promise<string> = readNativeClipboardText,
   ) {}
 
   async start() {
@@ -116,7 +121,9 @@ export class BrowserObserver {
         this.onClipboardStatus?.("redacted"); return;
       }
       let text: string;
-      try { text = await this.context.clipboard.readText({ page }); }
+      // Stagehand's clipboard.readText focuses its page before reading, which
+      // clears an omnibox selection. Observation must use a passive OS reader.
+      try { text = await this.readClipboard(sample); }
       catch { if (stillCurrent()) { this.nativeClipboardVersion = sample.clipboardVersion; this.nativeClipboardScope = scope; if (!this.lastClipboardKey) this.onClipboardStatus?.("unavailable"); } return; }
       if (!stillCurrent()) return;
       const active = await this.activeContentPage();
@@ -165,7 +172,7 @@ export class BrowserObserver {
       const url = await page.url();
       // The scan may not have noticed a just-completed navigation yet. Mark
       // its URL here so an older navigation cannot supersede this new signal.
-      this.urls.set(page.pageId, cleanUrl(url));
+      this.urls.set(page.pageId, resourceUrl(url) || cleanUrl(url));
       this.record(page, kind, label, cleanUrl(url), kind === "address-edit" ? addressText?.slice(0, 2048) : undefined);
     } catch { /* A closing tab must not interrupt desktop observation. */ }
   }
@@ -200,7 +207,7 @@ export class BrowserObserver {
                   this.lastClipboardKey = JSON.stringify([clipboard.text, clipboard.format, clipboard.redacted]);
                   this.lastClipboardTime = Date.now();
                 }
-                this.record(page, data.kind, data.label.slice(0, 100), this.urls.get(page.pageId) || cleanUrl(rawUrl), undefined, clipboard);
+                this.record(page, data.kind, data.label.slice(0, 100), cleanUrl(this.urls.get(page.pageId) || rawUrl), undefined, clipboard);
               } catch { /* Ignore unrelated or malformed page console output. */ }
             }
           });
@@ -208,25 +215,32 @@ export class BrowserObserver {
           await page.evaluate(installScript(this.dashboardOrigin));
         }
         const url = cleanUrl(rawUrl);
-        const focused = await page.evaluate((suppressed) => {
+        const { focused, title } = await page.evaluate((suppressed) => {
           (window as unknown as { __rebrowseSuppressed: boolean }).__rebrowseSuppressed = suppressed;
-          return document.hasFocus() && !document.hidden;
-        }, this.suppressed).catch(() => false);
+          return { focused: document.hasFocus() && !document.hidden, title: document.title };
+        }, this.suppressed).catch(() => ({ focused: false, title: "" }));
         if (focused) this.lastPage = page;
-        if (this.urls.get(page.pageId) !== url) {
-          this.urls.set(page.pageId, url);
+        // Keep public video/search identity without exposing arbitrary query
+        // parameters in the activity feed.
+        const identity = resourceUrl(rawUrl) || url;
+        const changed = this.urls.get(page.pageId) !== identity || this.titles.get(page.pageId) !== title;
+        if (this.urls.get(page.pageId) !== identity) {
+          this.urls.set(page.pageId, identity);
           if (focused || this.lastPage?.pageId === page.pageId) this.record(page, "navigate", "Opened a page", url);
         }
-        if (this.onContext && !this.suppressed && (focused || this.lastPage?.pageId === page.pageId)) {
+        this.titles.set(page.pageId, title);
+        // Background-opened guides count too. Re-read a loading tab once its
+        // title changes, without selecting or focusing that tab.
+        if (this.onContext && !this.suppressed && (changed || focused || this.lastPage?.pageId === page.pageId)) {
           const context = await readContext(page).catch(() => null);
-          if (context && !this.stopped && !this.suppressed && this.lastPage?.pageId === page.pageId) this.onContext(context, page);
+          if (context && !this.stopped && !this.suppressed) this.onContext(context, page, { background: !focused && this.lastPage?.pageId !== page.pageId });
         }
       }
       const alive = new Set(pages.map((page) => page.pageId));
       for (const [id, sub] of this.subscriptions) {
         if (!alive.has(id)) {
           await sub.unsubscribe().catch(() => {});
-          this.subscriptions.delete(id); this.urls.delete(id);
+          this.subscriptions.delete(id); this.urls.delete(id); this.titles.delete(id);
           if (this.lastPage?.pageId === id) this.lastPage = undefined;
         }
       }

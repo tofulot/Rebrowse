@@ -9,6 +9,7 @@ import { resolve } from "node:path";
 import { TaskJournal } from "./tasks.js";
 import { browserWorkflowDriver } from "./workflow-browser.js";
 import { WorkflowRunJournal } from "./workflow-runner.js";
+import { acquireBrowserSession } from "./browser-session.js";
 
 const help = `
 Browse normally in the browser. Enter commands here:
@@ -29,7 +30,7 @@ function webUrl(value: string) {
   return url.href;
 }
 
-async function main() {
+async function runSession() {
   const startUrl = webUrl(process.env.START_URL || "https://example.com");
   const browser = await launchBrowser();
   let agent: Awaited<ReturnType<typeof connectAgent>> | undefined;
@@ -39,21 +40,28 @@ async function main() {
   let desktop: DesktopObserver | undefined;
   const terminal = createInterface({ input: stdin, output: stdout });
   let closing = false;
-  const shutdown = async () => {
-    if (closing) return;
+  let ready = false;
+  let shutdownPromise: Promise<void> | undefined;
+  const shutdown = () => {
+    if (shutdownPromise) return shutdownPromise;
     closing = true;
-    terminal.close();
-    predictions.stop();
-    await predictions.finishExecution();
-    await predictions.flushTasks();
-    await desktop?.stop();
-    await observer?.stop();
-    await dashboard?.close();
-    try {
-      await agent?.close();
-    } finally {
-      await browser.close();
-    }
+    shutdownPromise = (async () => {
+      terminal.close();
+      predictions.stop();
+      await predictions.finishExecution();
+      await predictions.finishRecording();
+      await predictions.flushTasks();
+      await desktop?.stop();
+      await observer?.stop();
+      await dashboard?.close();
+      try {
+        await agent?.close();
+      } finally {
+        if (!ready && browser.origin === "connected") await browser.disconnect();
+        else await browser.close();
+      }
+    })();
+    return shutdownPromise;
   };
   const onSignal = () => {
     void shutdown().catch((error: unknown) => {
@@ -73,7 +81,7 @@ async function main() {
     observer = new BrowserObserver(browser.context, dashboard.origin,
       (event, page) => predictions.activity(event, page),
       (message) => predictions.reportError(message),
-      (context, page) => predictions.observe(context, page),
+      (context, page, options) => predictions.observe(context, page, options),
       (status) => predictions.clipboardStatus(status));
     predictions.observer = observer;
     desktop = new DesktopObserver(resolve("browser-data"), (state) => {
@@ -87,11 +95,15 @@ async function main() {
       (kind, label, addressText) => { void observer?.external(kind, label, addressText); });
     predictions.desktopObserver = desktop;
     const page = await browser.context.activePage() ?? await browser.context.newPage();
-    await page.goto(startUrl);
+    // Reconnecting must not replace an existing review/video tab with START_URL.
+    if (browser.origin === "launched") await page.goto(startUrl);
     await observer.start();
+    observer.lastPage ??= page;
     void desktop.start();
     const dashboardTab = await browser.context.newPage();
     await dashboardTab.goto(dashboard.url);
+    ready = true;
+    if (browser.origin === "connected") console.log("Reconnected to the existing Rebrowse browser. Your open tabs were kept.");
     console.log("Rebrowse · Stagehand browser ready.");
     console.log(help);
     console.log(`Live predictions: ${dashboard.url}\nSwitch to your browsing tab to generate signals.\n`);
@@ -146,6 +158,12 @@ async function main() {
     process.removeListener("SIGINT", onSignal);
     process.removeListener("SIGTERM", onSignal);
   }
+}
+
+async function main() {
+  const release = await acquireBrowserSession(resolve("browser-data"));
+  try { await runSession(); }
+  finally { await release(); }
 }
 
 main().catch((error: unknown) => {

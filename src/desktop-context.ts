@@ -19,6 +19,7 @@ export const desktopSampleSchema = z.object({
   focusAvailable: z.boolean().optional(), otherBrowserActive: z.boolean().optional(),
   addressText: z.string().max(2048).optional(),
   clipboardVersion: z.number().int().optional(),
+  browserPid: z.number().int().positive().optional(),
   clipboardShortcut: z.object({ id: z.number().int().positive(), kind: z.enum(["copy", "cut", "paste"]), target: z.enum(["address-bar", "browser-controls"]) }).optional(),
 });
 export type DesktopSample = z.infer<typeof desktopSampleSchema>;
@@ -80,6 +81,16 @@ export async function buildDesktopHelper() {
     await promisify(execFile)("swiftc", [source, "-o", destination, "-framework", "AppKit", "-framework", "ApplicationServices"], { timeout: 120000 });
   }
   return destination;
+}
+
+export async function readNativeClipboardText(sample: DesktopSample): Promise<string> {
+  if (process.platform !== "darwin" || !sample.active || !sample.browserPid || sample.clipboardVersion === undefined) throw new Error("Passive clipboard access is unavailable.");
+  const executable = await buildDesktopHelper();
+  const { stdout } = await promisify(execFile)(executable, ["--pid", String(sample.browserPid), "--read-clipboard", "--clipboard-version", String(sample.clipboardVersion)],
+    { timeout: 3000, maxBuffer: 65536 });
+  const result = z.object({ text: z.string().optional(), unavailable: z.boolean().optional() }).parse(JSON.parse(stdout));
+  if (result.unavailable || result.text === undefined) throw new Error("The browser or clipboard changed before reading completed.");
+  return result.text;
 }
 
 export class DesktopObserver {

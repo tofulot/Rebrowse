@@ -15,7 +15,7 @@ function candidate(overrides: Partial<TaskHypothesis> = {}): TaskHypothesis {
   return { taskId: null, title: "Connect prospects", confidence: .9, steps: ["Find profile", "Send invitation"], reason: "Two named outcomes observed",
     cycles: names.slice(0, 2).map((item, index) => ({ item, evidenceIds: [1, index + 2], outcome: "confirmed", outcomeEvidenceId: index + 2 })),
     totalItems: 3, totalEvidenceId: 1, remainingItems: [names[2]!], remainingEvidenceId: 1, currentItem: null,
-    nextStep: "Continue", continuation: "likely", suggestedWorkflow: null,
+    nextStep: "Continue", continuation: "likely", suggestedWorkflow: null, pattern: null,
     workQueue: { sourceObservationId: 1, sourceListIndex: 0,
       items: names.map((item, index) => ({ item, sourceRow: index + 1, state: "unstarted", evidenceId: 1, reason: "Visible source row" })) }, ...overrides };
 }
@@ -85,7 +85,7 @@ test("a visible blocker pauses an exhausted queue, persists across refreshes and
   const memory = setup();
   memory.observe({ url: "https://example.com/jamie", title: `Search for ${names[2]}`, headings: [names[2]!], actions: [], excerpt: "No matching profile found" }, "profile", []);
   const record = memory.accept(candidate({ workQueue: updateItem("blocked", 4) }))!;
-  assert.equal(record.workQueue.decision, "review");
+  assert.equal(record.workQueue.decision, "stop");
   assert.equal(record.workQueue.counts.blocked, 1);
   assert.equal(record.remainingCount, 1);
   assert.equal(record.workQueue.nextItem, null);
@@ -106,7 +106,7 @@ test("unconfirmed attempts require review instead of being suggested again", () 
   input.cycles.push({ item: names[2]!, evidenceIds: [1], outcome: "attempted", outcomeEvidenceId: null });
   const queue = setup().accept(input)!.workQueue;
   assert.equal(queue.items.find((item) => item.item === names[2])!.state, "blocked");
-  assert.equal(queue.decision, "review");
+  assert.equal(queue.decision, "stop");
 });
 
 test("a negated success message cannot finish the last queue item", () => {
@@ -115,7 +115,7 @@ test("a negated success message cannot finish the last queue item", () => {
   const input = candidate({ continuation: "finished", remainingItems: [] });
   input.cycles.push({ item: names[2]!, evidenceIds: [4], outcome: "confirmed", outcomeEvidenceId: 4 });
   const record = memory.accept(input)!;
-  assert.equal(record.workQueue.decision, "review");
+  assert.equal(record.workQueue.decision, "stop");
   assert.equal(record.workQueue.counts.confirmed, 2);
   assert.equal(record.remainingCount, 1);
 });
@@ -150,7 +150,7 @@ test("a changed or shrinking source cannot silently complete the queue or inheri
       lists: [{ label: "Prospects", items: names.slice(0, 2), truncated: false }] }, "list", []);
     const record = memory.accept(candidate({ taskId: first.id, totalItems: 2, totalEvidenceId: 4, remainingEvidenceId: 4, remainingItems: [], continuation: "finished",
       workQueue: { sourceObservationId: 4, sourceListIndex: 0, items: candidate().workQueue!.items.slice(0, 2) } }))!;
-    assert.equal(record.workQueue.decision, "review");
+    assert.equal(record.workQueue.decision, "stop");
     assert.equal(record.totalItems, null);
     assert.equal(record.workQueue.items.some((item) => item.item === names[2]), true);
   }

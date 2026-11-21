@@ -1,9 +1,10 @@
 const $ = (id) => document.getElementById(id);
+const hosted = document.body.classList.contains('hosted');
+const connectedLabel = hosted ? 'Live session' : 'Connected locally';
+if (hosted) $('connection').textContent = 'Connecting…';
 let state;
 let lastPredictionTime;
 let lastWorkflowRender;
-let lastInputDraft;
-let approving = false;
 const statusNames = { watching: 'Watching', collecting: 'Reading context', predicting: 'Predicting', ready: 'Watching', paused: 'Paused', error: 'Needs attention', 'needs-key': 'Key needed' };
 const stages = { watching: 'Listening for activity', collecting: 'Reading the current page', predicting: 'Estimating the next move', ready: 'Prediction updated', paused: 'Observation paused', error: 'Prediction unavailable', 'needs-key': 'Waiting for API key' };
 const icons = { click: '↗', hover: '⌁', edit: '⌨', focus: '⊡', scroll: '↕', navigate: '→', tab: '▣', copy: '▤', cut: '✂', paste: '↧', 'clipboard-available': '⎘', 'clipboard-change': '⎘', 'address-select': '⌘', 'address-focus': '⌕', 'address-edit': '⌨', 'pointer-dwell': '⌁', 'browser-focus': '▣' };
@@ -19,13 +20,14 @@ function render(next) {
   $('page-url').title = state.page?.url || '';
   $('pause').textContent = state.paused ? 'Resume watching  ▶' : 'Pause watching  Ⅱ';
   $('predict').disabled = state.paused || state.execution?.busy || !state.page || ['collecting', 'predicting', 'needs-key'].includes(state.status);
-  $('browser-mode').textContent = state.execution?.busy ? 'Approved workflow running' : 'Observe & predict';
+  $('browser-mode').textContent = state.execution?.busy ? 'Automatic workflow running' : state.recording && ['starting', 'recording', 'saving'].includes(state.recording.status) ? 'Observing & recording' : 'Observe & automate';
   $('thinking-state').textContent = stages[state.status];
   $('event-count').textContent = String(state.activity.length);
   $('requests').textContent = `${state.requests} predictions requested`;
   renderWorkflow(state);
   renderExecution(state);
   renderClipboard(state.clipboard);
+  renderRecording(state);
   $('error').hidden = !state.error;
   $('error').textContent = state.error || '';
   const desktop = state.desktop;
@@ -112,33 +114,33 @@ function renderWorkflow(state) {
   if (task) {
     $('workflow-title').textContent = task.title;
     $('workflow-confidence').textContent = `${Math.round(task.confidence * 100)}% ESTIMATED CONFIDENCE`;
-    const labels = { suspected: 'Possible repeatable task · repetition not yet observed', repeating: 'Likely to repeat', uncertain: 'Continuation uncertain', complete: 'Observed list finished' };
-    $('workflow-status').textContent = `${labels[task.status]}${state.activeTaskId === task.id ? '' : ' · detected earlier'} · ${new Date(task.updatedAt).toLocaleTimeString()}`;
-    $('workflow-reason').textContent = task.reason;
+    const labels = { suspected: 'Early pattern · inferred from limited activity', repeating: 'Likely to repeat', uncertain: 'Bounded continuation', complete: 'Observed list finished' };
+    $('workflow-status').textContent = `${task.pattern && task.status === 'complete' ? 'Planned resource batch finished' : labels[task.status]}${state.activeTaskId === task.id ? '' : ' · detected earlier'} · ${new Date(task.updatedAt).toLocaleTimeString()}`;
+    $('workflow-reason').textContent = task.pattern ? `${task.pattern.action} · ${Math.round(task.pattern.repeatLikelihood * 100)}% estimated repeat likelihood. ${task.pattern.reason}` : task.reason;
     $('workflow-steps').replaceChildren(...task.steps.map((step) => element('li', '', step)));
     const statistics = [
-      ['Item cycles observed', task.cycles.length], ['Confirmed outcomes', task.completedItems.length],
-      ['Total items', task.totalItems ?? 'Unknown'], ['Remaining', task.remainingCount ?? 'Unknown'],
+      ['Item cycles observed', task.cycles.length], [task.pattern ? 'Planned targets finished' : 'Confirmed outcomes', task.completedItems.length],
+      [task.pattern ? 'Planned items' : 'Total items', task.pattern ? task.workQueue.items.length : task.totalItems ?? 'Unknown'], ['Remaining in plan', task.workQueue.counts.knownRemaining],
     ];
     $('workflow-progress').replaceChildren(...statistics.map(([label, value]) => {
       const box = element('div', 'workflow-stat'); box.append(element('strong', '', String(value)), element('span', '', label)); return box;
     }));
     $('workflow-next').textContent = task.nextStep;
-    $('workflow-remaining').textContent = task.remainingItems.length ? `Known unprocessed items: ${task.remainingItems.join(', ')}`
-      : task.remainingCount === null ? 'The complete list is not established; remaining work is unknown.' : task.remainingCount ? 'Unprocessed item names have not been established.' : 'Every item in the observed list has a confirmed outcome.';
+    $('workflow-remaining').textContent = task.remainingItems.length ? `${task.pattern ? 'Planned targets' : 'Known unprocessed items'}: ${task.remainingItems.join(', ')}`
+      : task.pattern ? task.workQueue.items.length ? 'This planned batch is finished; its broader scope was inferred from context.' : 'Pattern detected. Remaining resources and the endpoint are not established yet.' : task.remainingCount === null ? 'The complete list is not established; remaining work is unknown.' : task.remainingCount ? 'Unprocessed item names have not been established.' : 'Every item in the observed list has a confirmed outcome.';
     const queue = task.workQueue;
-    const decisions = { continue: 'CONTINUE SUGGESTED', review: 'REVIEW NEEDED', inspect: 'CHECK SOURCE LIST', complete: 'FINISH SUGGESTED' };
+    const decisions = { continue: 'NEXT TARGETS', stop: 'STOPPED', inspect: 'NO FURTHER TARGETS', complete: 'BATCH FINISHED' };
     $('queue-decision').textContent = decisions[queue.decision];
     $('queue-decision').dataset.decision = queue.decision;
     $('queue-reason').textContent = queue.reason;
     $('queue-counts').replaceChildren(...[
-      ['Confirmed', queue.counts.confirmed], ['Ready', queue.counts.ready], ['In progress', queue.counts.inProgress], ['Blocked', queue.counts.blocked],
+      ['Confirmed', queue.counts.confirmed], ['Ready', queue.counts.ready], ['In progress', queue.counts.inProgress], ['Unavailable', queue.counts.blocked],
     ].map(([label, value]) => { const cell = element('div', 'queue-stat'); cell.append(element('strong', '', String(value)), element('span', '', label)); return cell; }));
-    $('queue-scope').textContent = queue.scope === 'verified' ? `${queue.counts.total} unique items · ${queue.counts.remaining} remaining`
+    $('queue-scope').textContent = queue.scope === 'inferred' ? `${queue.counts.known} planned targets · ${queue.counts.ready} ready · full endpoint ${task.pattern?.endKnown ? 'inferred' : 'unknown'}` : queue.scope === 'verified' ? `${queue.counts.total} unique items · ${queue.counts.remaining} remaining`
       : `At least ${queue.counts.knownRemaining} remaining · Total unknown`;
     $('queue-scope-reason').textContent = queue.scopeReason;
-    $('queue-next').textContent = queue.nextItem ? `Suggested next item: ${queue.nextItem}` : queue.decision === 'complete' ? 'No further repetition suggested.' : 'No next item suggested until the scope or unresolved items are checked.';
-    const itemStates = { unstarted: 'Ready', in_progress: 'In progress', confirmed: 'Confirmed', blocked: 'Needs review' };
+    $('queue-next').textContent = queue.nextItem ? `Suggested next item: ${queue.nextItem}` : queue.decision === 'complete' ? 'No further repetition suggested.' : 'No additional useful target is currently planned.';
+    const itemStates = { unstarted: 'Ready', in_progress: 'In progress', confirmed: 'Confirmed', blocked: 'Unavailable' };
     $('queue-items').replaceChildren(...queue.items.map((item) => {
       const row = element('li', 'queue-item'); row.dataset.state = item.state;
       const body = element('div', ''); body.append(element('strong', '', item.item), element('p', '', item.reason),
@@ -159,21 +161,14 @@ function renderWorkflow(state) {
       }));
       $('draft-loop').textContent = draft.loop;
       $('draft-steps').replaceChildren(...draft.steps.map((step) => {
-        const row = element('li', ''); row.append(element('strong', '', step.instruction), element('p', '', `Check: ${step.check}`), element('span', '', `Based on observed step ${step.sourceStep}`)); return row;
+        const row = element('li', ''); row.append(element('strong', '', step.instruction), element('p', '', `Check: ${step.check}`), element('span', '', `Workflow step ${step.sourceStep}`)); return row;
       }));
       $('draft-skip').textContent = draft.skipCompleted;
       $('draft-stop').textContent = draft.stopWhen;
-      $('draft-review').replaceChildren(...draft.reviewNotes.map((note) => element('li', '', note)));
-      $('draft-version').textContent = `Suggestion v${draft.version} · Review only · Not executed`;
+      $('draft-notes').replaceChildren(...draft.notes.map((note) => element('li', '', note)));
+      $('draft-version').textContent = `Workflow v${draft.version} · Automatic`;
       $('draft-download').href = `./workflow/${encodeURIComponent(task.id)}.md`;
-      const inputKey = `${task.id}:${draft.version}`;
-      if (inputKey !== lastInputDraft) {
-        lastInputDraft = inputKey;
-        $('run-inputs').replaceChildren(...draft.inputs.filter((input) => !['items', 'item', 'source_url'].includes(input.name)).map((input) => {
-          const label = element('label', 'run-input'); label.append(element('span', '', `${input.name} — ${input.description}`));
-          const field = element('input', ''); field.type = 'text'; field.name = input.name; field.maxLength = 500; field.autocomplete = 'off'; label.append(field); return label;
-        }));
-      }
+
     }
   }
   const log = state.taskLog || [];
@@ -185,53 +180,71 @@ function renderWorkflow(state) {
     return row;
   }));
 }
-function currentTask() { return state?.tasks?.find((task) => task.id === state.activeTaskId) || state?.tasks?.[0]; }
 function renderExecution(state) {
-  const task = currentTask(); const execution = state.execution;
-  const offer = task && execution?.offers?.[task.id]; const run = execution?.run;
-  $('workflow-approve').disabled = approving || !execution?.available || execution.busy || state.paused || !offer?.canRun;
-  $('workflow-approve').textContent = approving ? 'Starting…' : 'Approve & run ↗';
-  $('run-offer').textContent = !execution?.available ? 'Workflow execution is not connected in this session.' : state.paused ? 'Resume watching to approve a workflow.' : offer?.reason || 'A detected task is needed before running.';
-  $('run-scope').textContent = task ? `Source: ${task.workQueue.source?.url || 'Unknown'} · Remaining items: ${task.workQueue.items.filter((item) => item.state === 'unstarted' || item.state === 'in_progress').map((item) => item.item).join(', ') || 'None ready'}` : '';
-  if (task?.workflowDraft) $('draft-version').textContent = run?.taskId === task.id && run.version === task.workflowDraft.version
-    ? `Suggestion v${task.workflowDraft.version} · Approved run: ${run.status}` : `Suggestion v${task.workflowDraft.version} · Not executed · Approval required`;
+  const run = state.execution?.run;
+  $('automation-status').textContent = state.execution?.reason || 'Watching for a repeatable task with useful next targets.';
   $('workflow-run').hidden = !run;
   if (!run) return;
-  const labels = { running: 'RUNNING', pausing: 'PAUSING · CURRENT ACTION MAY FINISH', paused: 'PAUSED · REVIEW NEEDED', complete: 'COMPLETE · STOPPED' };
+  const labels = { running: 'RUNNING AUTOMATICALLY', pausing: 'STOPPING', paused: 'STOPPED', complete: 'BATCH FINISHED' };
   $('run-title').textContent = `Workflow v${run.version}`;
   $('run-status').textContent = labels[run.status]; $('run-status').dataset.status = run.status;
   $('run-message').textContent = run.message;
-  $('run-progress').textContent = `${run.completedItems.length} of ${run.approvedItems.length} approved items confirmed · ${run.actionCount} browser actions${run.item ? ` · ${run.item}, step ${run.step}` : ''}`;
-  $('workflow-run-pause').hidden = !execution.busy;
+  $('run-progress').textContent = `${run.completedItems.length} of ${run.plannedItems.length} planned items finished · ${run.actionCount} browser actions${run.item ? ` · ${run.item}` : ''}`;
+  $('workflow-run-pause').hidden = !state.execution.busy;
   $('workflow-run-pause').disabled = run.status === 'pausing';
-  $('run-review').hidden = run.status !== 'paused';
+  $('run-stop-note').hidden = run.status !== 'paused';
   $('run-log').replaceChildren(...run.log.slice(-20).reverse().map((entry) => {
     const row = element('li', ''); row.append(element('time', '', new Date(entry.time).toLocaleTimeString()), element('span', '', entry.message)); return row;
   }));
 }
 const stream = new EventSource('./events');
-stream.onmessage = (event) => { render(JSON.parse(event.data)); $('connection').textContent = 'Connected locally'; $('connection').parentElement.classList.remove('offline'); };
-stream.onopen = () => { $('connection').textContent = 'Connected locally'; $('connection').parentElement.classList.remove('offline'); };
+stream.onmessage = (event) => { render(JSON.parse(event.data)); };
+stream.onopen = () => { $('connection').textContent = connectedLabel; $('connection').parentElement.classList.remove('offline'); };
 stream.onerror = () => { $('connection').textContent = 'Reconnecting…'; $('connection').parentElement.classList.add('offline'); };
 async function command(name) {
   try {
     const response = await fetch(`./${name}`, { method: 'POST' });
-    if (!response.ok) throw new Error('Command failed. Reconnect to the local session.');
+    if (!response.ok) throw new Error('Command failed. Check that your Rebrowse session is connected.');
   } catch (error) { $('error').hidden = false; $('error').textContent = error.message; }
-}
-async function approveWorkflow() {
-  const task = currentTask(); const offer = task && state.execution?.offers?.[task.id];
-  if (approving || !task || !offer?.canRun || state.execution?.busy) return;
-  const approval = { taskId: task.id, token: offer.token, inputs: Object.fromEntries([...$('run-inputs').querySelectorAll('input')].map((input) => [input.name, input.value])) };
-  approving = true; renderExecution(state);
-  try {
-    const response = await fetch('./workflow-run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(approval) });
-    if (!response.ok) { const result = await response.json(); throw new Error(result.error || 'The workflow could not be started.'); }
-  } catch (error) { $('error').hidden = false; $('error').textContent = error.message; }
-  finally { approving = false; renderExecution(state); }
 }
 $('pause').onclick = () => command(state?.paused ? 'resume' : 'pause');
 $('predict').onclick = () => command('predict');
 $('desktop-enable').onclick = () => command('desktop-enable');
-$('workflow-approve').onclick = approveWorkflow;
 $('workflow-run-pause').onclick = () => command('workflow-pause');
+
+function renderRecording(state) {
+  const recording = state.recording;
+  const active = recording && ['starting', 'recording', 'saving'].includes(recording.status);
+  const labels = { idle: 'NOT RECORDING', starting: 'STARTING', recording: 'RECORDING', saving: 'SAVING', saved: 'SAVED LOCALLY', error: 'SAVE FAILED' };
+  $('recording-status').textContent = labels[recording?.status] || 'NOT RECORDING';
+  $('recording-start').hidden = !!active;
+  $('recording-start').disabled = !!state.paused;
+  $('recording-stop').hidden = !active;
+  $('recording-stop').disabled = recording?.status !== 'recording';
+  $('recording-download').hidden = recording?.status !== 'saved';
+  $('recording-replay').hidden = recording?.status !== 'saved';
+  $('recording-replay').disabled = state.replay?.status === 'running' || !recording?.steps;
+  $('recording-progress').textContent = recording?.error || (recording?.id ? `${recording.name} · ${recording.steps} observed steps · ${recording.actions} meaningful action signals · ${recording.frames} page states` : 'Page states and browser signals are saved locally when recording is on.');
+  const first = recording?.firstDetection;
+  $('recording-detection').textContent = first ? `First new or updated finding used step ${first.step}: ${first.title} · ${Math.round(first.confidence * 100)}% confidence · ${(first.durationMs / 1000).toFixed(1)}s response · appeared ${(first.elapsedMs / 1000).toFixed(1)}s into the recording.` : active ? 'Waiting for the first accepted pattern finding…' : '';
+  const replay = state.replay;
+  $('replay-result').hidden = !replay || replay.status === 'idle';
+  $('replay-download').hidden = !replay?.report;
+  const report = replay?.report;
+  $('replay-summary').textContent = replay?.error || (replay?.status === 'running' ? `Inferring patterns from saved activity… ${replay.progress} steps checked. Replay does not execute actions.` : report ? `${report.verdict === 'error' ? 'Some predictions could not finish' : report.verdict === 'incomplete' ? 'Replay incomplete' : 'Replay complete'} · First pattern discovered: ${report.firstDetectionStep === null ? 'none yet' : 'step ' + report.firstDetectionStep} · Mean response: ${report.meanInferenceMs === null ? '—' : (report.meanInferenceMs / 1000).toFixed(1) + 's'}` : '');
+  $('replay-baseline').textContent = report ? `${report.evaluatedSteps} of ${report.totalSteps} steps checked. ${report.baselineCount} observations were already present when recording started. Steps are state/action checkpoints, not keystrokes.` : '';
+  $('replay-rows').replaceChildren(...(report?.rows || []).map((row) => {
+    const tr = document.createElement('tr');
+    for (const value of [row.step, row.resources, row.error || row.detected || (row.proposed ? 'Proposed; not accepted' : 'None yet'), row.confidence === null ? '—' : Math.round(row.confidence * 100) + '%', row.durationMs === null ? '—' : (row.durationMs / 1000).toFixed(1) + 's']) tr.append(element('td', '', String(value)));
+    return tr;
+  }));
+}
+async function recordingCommand(name) {
+  try {
+    const response = await fetch('./recording-' + name, { method: 'POST' });
+    if (!response.ok) throw new Error((await response.json()).error || 'Recording command failed.');
+  } catch (error) { $('error').hidden = false; $('error').textContent = error.message; }
+}
+$('recording-start').onclick = () => recordingCommand('start');
+$('recording-stop').onclick = () => recordingCommand('stop');
+$('recording-replay').onclick = () => recordingCommand('replay');

@@ -13,18 +13,19 @@ export const queueProposalSchema = z.object({
   })).max(40),
 });
 export type QueueProposal = z.infer<typeof queueProposalSchema>;
-export type QueueItem = {
+type QueueItem = {
   item: string; state: "unstarted" | "in_progress" | "confirmed" | "blocked";
   reason: string; evidenceIds: number[]; stateEvidenceId: number | null;
+  targetUrl?: string; basis?: "observed" | "inferred";
 };
 type Source = { observationId: number; url: string; title: string; listIndex: number; label: string; rows: string[]; truncated: boolean };
 export type WorkQueue = {
   source: Source | null;
-  scope: "verified" | "partial" | "unknown";
+  scope: "verified" | "partial" | "unknown" | "inferred";
   scopeReason: string;
   items: QueueItem[];
   counts: { known: number; confirmed: number; ready: number; inProgress: number; blocked: number; knownRemaining: number; remaining: number | null; total: number | null };
-  decision: "continue" | "review" | "inspect" | "complete";
+  decision: "continue" | "stop" | "inspect" | "complete";
   reason: string; nextItem: string | null;
   completionRule: string;
 };
@@ -48,7 +49,7 @@ export function buildWorkQueue(candidate: TaskHypothesis, cycles: TaskHypothesis
     listIndex, label: list.label, rows: list.items, truncated: list.truncated } : null;
   const sourceChanged = !!(incoming && previous?.source && (incoming.url !== previous.source.url || incoming.listIndex !== previous.source.listIndex || incoming.label !== previous.source.label));
   // A different source is a different run. Never carry completions into it.
-  // Keep the current queue for review rather than silently merging the lists.
+  // Keep the current queue separate from unrelated source lists.
   const source = sourceChanged ? previous!.source : incoming || previous?.source || null;
   const items = new Map((previous?.items || []).map((item) => [itemKey(item.item), { ...item, evidenceIds: [...item.evidenceIds] }]));
   const add = (name: string, evidenceIds: number[]) => {
@@ -82,7 +83,7 @@ export function buildWorkQueue(candidate: TaskHypothesis, cycles: TaskHypothesis
       const blocked = /\b(no (?:matching|results|match)|not found|multiple (?:matches|matching|results)|ambiguous|failed|error|unavailable|unable|could not|couldn't|try again)\b/i.test(text);
       const newer = entry.evidenceId! >= (item.stateEvidenceId ?? 0);
       if (newer && (entry.state === "blocked" && blocked || entry.state === "in_progress" && active && !blocked)) {
-        item.state = entry.state; item.reason = entry.reason || (blocked ? "A visible blocker needs review." : "Working on this item; outcome not yet confirmed.");
+        item.state = entry.state; item.reason = entry.reason || (blocked ? "A visible blocker makes this item unavailable." : "Working on this item; outcome not yet confirmed.");
         item.stateEvidenceId = entry.evidenceId;
         item.evidenceIds = mergeEvidence(item.evidenceIds, [entry.evidenceId!]);
       }
@@ -95,7 +96,7 @@ export function buildWorkQueue(candidate: TaskHypothesis, cycles: TaskHypothesis
         item.state = "confirmed"; item.reason = "A named, visible outcome confirms completion.";
         item.stateEvidenceId = cycle.outcomeEvidenceId;
       } else if (item.state === "unstarted") {
-        item.state = "blocked"; item.reason = "An attempt was observed without a confirmed outcome. Review before repeating it.";
+        item.state = "blocked"; item.reason = "An attempt was observed without a confirmed outcome. It will not be retried automatically.";
         item.stateEvidenceId = Math.max(...cycle.evidenceIds);
       }
     }
@@ -126,23 +127,23 @@ export function buildWorkQueue(candidate: TaskHypothesis, cycles: TaskHypothesis
   const blocked = queueItems.filter((item) => item.state === "blocked").length;
   const knownRemaining = queueItems.length - confirmed;
   const complete = verified && queueItems.length > 0 && knownRemaining === 0;
-  const decision = sourceChanged || outsideCycles || missingMembers ? "review" : complete ? "complete" : inProgress || ready ? "continue" : blocked ? "review" : "inspect";
+  const decision = sourceChanged || outsideCycles || missingMembers ? "stop" : complete ? "complete" : inProgress || ready ? "continue" : blocked ? "stop" : "inspect";
   const next = decision === "continue" ? queueItems.find((item) => item.state === "in_progress") || queueItems.find((item) => item.state === "unstarted") : undefined;
-  const scopeReason = sourceChanged ? "A different source list was observed. Review the run boundary; earlier completions were not applied to the new list."
-    : outsideCycles ? "Some observed cycles are outside the source list. The task scope needs review."
-    : missingMembers ? "The source no longer shows some known items. Review the task scope; outstanding work has been retained."
+  const scopeReason = sourceChanged ? "A different source list was observed. Earlier completions were not applied to this new source."
+    : outsideCycles ? "Some observed cycles are outside the source list. The source does not match this task."
+    : missingMembers ? "The source no longer shows some known items. Outstanding work has been retained outside this batch."
     : verified ? `Full observed list mapped to ${queueItems.length} unique items; duplicate rows are counted once.`
     : source?.truncated ? "Only part of the source list is visible; the total is unknown."
     : source ? "The full list membership or its end has not been established; the total is unknown."
     : "The source list has not been established; the total is unknown.";
   const reason = sourceChanged || outsideCycles || missingMembers ? scopeReason : complete ? "Every unique item in the verified list has a confirmed outcome. No further repetition is suggested."
-    : decision === "continue" ? `${inProgress ? "Finish checking the current item" : "Another known item is ready"}${blocked ? `; ${blocked} blocked item${blocked === 1 ? " needs" : "s need"} review` : ""}.${verified ? "" : " More items may exist beyond the observed list."}`
-    : blocked ? "Known items have unresolved blockers or outcomes. Review them before suggesting another attempt."
+    : decision === "continue" ? `${inProgress ? "Finish checking the current item" : "Another known item is ready"}${blocked ? `; ${blocked} unavailable item${blocked === 1 ? "" : "s"} remain` : ""}.${verified ? "" : " More items may exist beyond the observed list."}`
+    : blocked ? "Known items have unresolved blockers or outcomes. They are not retried automatically."
     : "No ready items are known, but the full list is unverified. Inspect the source or its next page before declaring completion.";
   return { source, scope, scopeReason, items: queueItems,
     counts: { known: queueItems.length, confirmed, ready, inProgress, blocked, knownRemaining, remaining: verified ? knownRemaining : null, total: verified ? queueItems.length : null },
     decision, reason, nextItem: next?.item || null,
-    completionRule: "Finish only when the complete source list is established and every unique item has a confirmed outcome. Unresolved items require review; an empty visible page does not prove completion. Predictions alone never execute actions." };
+    completionRule: "Finish only when the complete source list is established and every unique item has a confirmed outcome. Unavailable items are skipped; an empty visible page does not prove completion. Predictions alone never execute actions." };
 }
 
 export function workQueueReport(queue: WorkQueue) {
